@@ -1,6 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import Compression
+import AVFoundation
 
 @main
 struct MyHTMLAppApp: App {
@@ -23,9 +24,13 @@ struct ContentView: View {
     @State private var files: [ExtractedFile] = []
     @State private var zipName = "未選択"
     @State private var showPicker = false
+    @State private var showDeviceInfo = false
+
     @State private var previewFile: ExtractedFile?
     @State private var previewText = ""
     @State private var previewImage: UIImage?
+    @State private var audioFile: ExtractedFile?
+
     @State private var shareItems: [Any] = []
     @State private var showShare = false
     @State private var message = ""
@@ -45,7 +50,7 @@ struct ContentView: View {
         NavigationView {
             VStack(spacing: 0) {
                 HStack(spacing: 12) {
-                    AppIconView(size: 46)
+                    ZipFileBadgeView(size: 46)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(appDisplayName).font(.headline)
                         Text("ZIP: \(zipName)").font(.caption).foregroundColor(.secondary).lineLimit(1)
@@ -65,7 +70,7 @@ struct ContentView: View {
 
                 if files.isEmpty {
                     VStack(spacing: 16) {
-                        AppIconView(size: 84)
+                        ZipFileBadgeView(size: 84)
                         Text(appDisplayName).font(.title2.bold())
                         Text("ZIPの中身を全部バラバラに展開します\n「ファイル」アプリから選ぶか、共有から送ってください")
                             .font(.caption)
@@ -89,7 +94,7 @@ struct ContentView: View {
                         ForEach(files) { file in
                             HStack(spacing: 12) {
                                 Image(systemName: icon(for: file.url))
-                                    .foregroundColor(.orange)
+                                    .foregroundColor(iconColor(for: file.url))
                                     .frame(width: 28)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(file.name).font(.body.weight(.medium)).lineLimit(1)
@@ -120,11 +125,18 @@ struct ContentView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
-                    if !files.isEmpty {
-                        Button("全消去", role: .destructive) {
-                            try? FileManager.default.removeItem(at: rootDir)
-                            files = []
-                            zipName = "未選択"
+                    HStack(spacing: 12) {
+                        Button {
+                            showDeviceInfo = true
+                        } label: {
+                            Image(systemName: "info.circle")
+                        }
+                        if !files.isEmpty {
+                            Button("全消去", role: .destructive) {
+                                try? FileManager.default.removeItem(at: rootDir)
+                                files = []
+                                zipName = "未選択"
+                            }
                         }
                     }
                 }
@@ -143,12 +155,18 @@ struct ContentView: View {
                 extract(pickedURL)
             }
         }
+        .sheet(isPresented: $showDeviceInfo) {
+            DeviceEnvInfoView(appName: appDisplayName)
+        }
         .sheet(item: $previewFile) { file in
             NavigationView {
                 Group {
                     if let img = previewImage {
                         ScrollView([.horizontal, .vertical]) {
-                            Image(uiImage: img).resizable().scaledToFit().padding()
+                            Image(uiImage: img)
+                                .resizable()
+                                .scaledToFit()
+                                .padding()
                         }
                     } else {
                         ScrollView {
@@ -172,6 +190,12 @@ struct ContentView: View {
                         Button("閉じる") { previewFile = nil; previewImage = nil }
                     }
                 }
+            }
+        }
+        .sheet(item: $audioFile, onDismiss: { audioFile = nil }) { file in
+            AudioPlayerSheet(file: file) {
+                shareItems = [file.url]
+                showShare = true
             }
         }
         .sheet(isPresented: $showShare) {
@@ -200,9 +224,7 @@ struct ContentView: View {
                 try fm.removeItem(at: copiedURL)
             }
 
-            if let coordinated = coordinatedCopy(from: sourceURL, to: copiedURL, fm: fm) {
-                _ = coordinated
-            } else {
+            if coordinatedCopy(from: sourceURL, to: copiedURL, fm: fm) == nil {
                 try fm.copyItem(at: sourceURL, to: copiedURL)
             }
 
@@ -248,7 +270,15 @@ struct ContentView: View {
         files = list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
+    private func isAudio(_ url: URL) -> Bool {
+        ["mp3", "wav", "m4a", "aac", "caf", "aiff"].contains(url.pathExtension.lowercased())
+    }
+
     private func open(_ file: ExtractedFile) {
+        if isAudio(file.url) {
+            audioFile = file
+            return
+        }
         if let data = try? Data(contentsOf: file.url) {
             if let img = UIImage(data: data) {
                 previewImage = img; previewText = ""; previewFile = file; return
@@ -264,10 +294,20 @@ struct ContentView: View {
     private func icon(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
         case "png", "jpg", "jpeg", "gif", "webp", "heic": return "photo.fill"
-        case "mp3", "wav", "m4a": return "waveform"
+        case "mp3", "wav", "m4a", "aac", "caf", "aiff": return "waveform"
         case "mp4", "mov": return "film.fill"
         case "pdf": return "doc.richtext.fill"
+        case "zip": return "doc.zipper"
         default: return "doc.text.fill"
+        }
+    }
+
+    private func iconColor(for url: URL) -> Color {
+        switch url.pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "webp", "heic": return .pink
+        case "mp3", "wav", "m4a", "aac", "caf", "aiff": return .purple
+        case "zip": return .orange
+        default: return .blue
         }
     }
 
@@ -276,23 +316,196 @@ struct ContentView: View {
     }
 }
 
-struct AppIconView: View {
+struct ZipFileBadgeView: View {
     let size: CGFloat
 
     var body: some View {
         ZStack {
-            LinearGradient(
-                gradient: Gradient(colors: [Color.orange, Color.pink]),
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
-            Image(systemName: "archivebox.fill")
-                .font(.system(size: size * 0.48, weight: .bold))
-                .foregroundColor(.white)
+            RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                .fill(Color(.systemBackground))
+                .overlay(
+                    RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
+                        .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+                )
+            Image(systemName: "doc.zipper")
+                .font(.system(size: size * 0.52, weight: .medium))
+                .foregroundColor(.gray)
         }
         .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
-        .shadow(color: Color.orange.opacity(0.3), radius: size * 0.08, x: 0, y: size * 0.04)
+        .shadow(color: Color.black.opacity(0.08), radius: size * 0.06, x: 0, y: size * 0.03)
+    }
+}
+
+struct DeviceEnvInfoView: View {
+    let appName: String
+    @Environment(\.presentationMode) private var presentationMode
+
+    private var device: UIDevice { UIDevice.current }
+    private var bundleID: String { Bundle.main.bundleIdentifier ?? "-" }
+    private var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+        return "\(v) (\(b))"
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section(header: Text("自分の端末・iOS環境")) {
+                    LabeledContentRow(label: "OS", value: "\(device.systemName) \(device.systemVersion)")
+                    LabeledContentRow(label: "端末種別", value: device.localizedModel)
+                    LabeledContentRow(label: "モデル名", value: device.model)
+                }
+                Section(header: Text("インストール環境・アプリ情報")) {
+                    LabeledContentRow(label: "表示名", value: appName)
+                    LabeledContentRow(label: "Bundle ID", value: bundleID)
+                    LabeledContentRow(label: "バージョン", value: appVersion)
+                    LabeledContentRow(label: "導入経路", value: "GitHub Actions / KSign 署名導入")
+                }
+            }
+            .navigationTitle("環境・バージョン情報")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") {
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LabeledContentRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack {
+            Text(label).foregroundColor(.secondary)
+            Spacer()
+            Text(value).multilineTextAlignment(.trailing)
+        }
+    }
+}
+
+struct AudioPlayerSheet: View {
+    let file: ExtractedFile
+    let onShare: () -> Void
+
+    @Environment(\.presentationMode) private var presentationMode
+    @State private var player: AVAudioPlayer?
+    @State private var isPlaying = false
+    @State private var currentTime: TimeInterval = 0
+    @State private var duration: TimeInterval = 1
+    @State private var errorText: String?
+    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        NavigationView {
+            VStack(spacing: 24) {
+                Image(systemName: "waveform.circle.fill")
+                    .font(.system(size: 72))
+                    .foregroundColor(.purple)
+
+                Text(file.name)
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal)
+
+                if let err = errorText {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal)
+                } else {
+                    VStack(spacing: 6) {
+                        Slider(
+                            value: Binding(
+                                get: { currentTime },
+                                set: { newVal in
+                                    currentTime = newVal
+                                    player?.currentTime = newVal
+                                }
+                            ),
+                            in: 0...max(duration, 0.1)
+                        )
+                        HStack {
+                            Text(timeText(currentTime))
+                            Spacer()
+                            Text(timeText(duration))
+                        }
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+
+                Button {
+                    togglePlay()
+                } label: {
+                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 64))
+                        .foregroundColor(.purple)
+                }
+                .disabled(errorText != nil)
+            }
+            .padding()
+            .navigationTitle("音声再生")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button(action: onShare) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") {
+                        player?.stop()
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                }
+            }
+        }
+        .onAppear(perform: setupPlayer)
+        .onDisappear { player?.stop() }
+        .onReceive(timer) { _ in
+            guard let p = player else { return }
+            currentTime = p.currentTime
+            isPlaying = p.isPlaying
+        }
+    }
+
+    private func setupPlayer() {
+        do {
+            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+            try AVAudioSession.sharedInstance().setActive(true)
+            let p = try AVAudioPlayer(contentsOf: file.url)
+            p.prepareToPlay()
+            duration = max(p.duration, 0.1)
+            player = p
+            p.play()
+            isPlaying = true
+        } catch {
+            errorText = "この音声ファイルを再生できませんでした: \(error.localizedDescription)"
+        }
+    }
+
+    private func togglePlay() {
+        guard let p = player else { return }
+        if p.isPlaying {
+            p.pause()
+            isPlaying = false
+        } else {
+            p.play()
+            isPlaying = true
+        }
+    }
+
+    private func timeText(_ sec: TimeInterval) -> String {
+        let total = Int(max(0, sec))
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 
