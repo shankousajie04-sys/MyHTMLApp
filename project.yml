@@ -8,11 +8,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - path: ContentView.swift
+      - ContentView.swift
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
         GENERATE_INFOPLIST_FILE: "YES"
-    info:
-      properties:
-        UILaunchScreen: {}
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
