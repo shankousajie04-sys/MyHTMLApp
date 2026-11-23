@@ -275,21 +275,31 @@ struct ContentView: View {
         ["mp3", "wav", "m4a", "aac", "caf", "aiff"].contains(url.pathExtension.lowercased())
     }
 
+    private func isText(_ url: URL) -> Bool {
+        ["txt", "json", "xml", "html", "htm", "css", "js", "ts", "swift", "py", "md", "csv", "log", "yml", "yaml"].contains(url.pathExtension.lowercased())
+    }
+
     private func open(_ file: ExtractedFile) {
         if isAudio(file.url) {
             audioFile = file
             return
         }
-        if let data = try? Data(contentsOf: file.url) {
-            if let img = UIImage(data: data) {
-                previewImage = img; previewText = ""; previewFile = file; return
-            }
-            if let str = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) {
-                previewImage = nil; previewText = str; previewFile = file; return
-            }
+        if let data = try? Data(contentsOf: file.url), let img = UIImage(data: data) {
+            previewImage = img
+            previewText = ""
+            previewFile = file
+            return
         }
-        shareItems = [file.url]
-        showShare = true
+        if isText(file.url),
+           let data = try? Data(contentsOf: file.url),
+           let str = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) {
+            previewImage = nil
+            previewText = str
+            previewFile = file
+            return
+        }
+        message = "現在その拡張子やファイルはZIP BOXには対応していません。"
+        showMessage = true
     }
 
     private func icon(for url: URL) -> String {
@@ -661,7 +671,6 @@ enum ZipUnpacker {
             if let streamDecoded = decompressStream(src: src, initialHint: uncompSize) {
                 return streamDecoded
             }
-            // 生DEFLATEストリーム向けにzlibヘッダ/フッタを付与して再試行
             var wrapped = Data([0x78, 0x9C])
             wrapped.append(src)
             wrapped.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
