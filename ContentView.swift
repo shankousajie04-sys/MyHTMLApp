@@ -200,23 +200,10 @@ struct ContentView: View {
                 try fm.removeItem(at: copiedURL)
             }
 
-            var readError: NSError?
-            var copySuccess = false
-            let coordinator = NSFileCoordinator()
-            coordinator.coordinate(readingItemAt: sourceURL, options: [], error: &readError) { coordinatedURL in
-                do {
-                    try fm.copyItem(at: coordinatedURL, to: copiedURL)
-                    copySuccess = true
-                } catch {
-                    readError = error as NSError
-                }
-            }
-
-            if !copySuccess {
+            if let coordinated = coordinatedCopy(from: sourceURL, to: copiedURL, fm: fm) {
+                _ = coordinated
+            } else {
                 try fm.copyItem(at: sourceURL, to: copiedURL)
-            }
-            if let err = readError, !copySuccess {
-                throw err
             }
 
             let data = try Data(contentsOf: copiedURL)
@@ -232,6 +219,17 @@ struct ContentView: View {
             message = "解凍失敗: \(error.localizedDescription)"
             showMessage = true
         }
+    }
+
+    private func coordinatedCopy(from src: URL, to dst: URL, fm: FileManager) -> Bool? {
+        var error: NSError?
+        var ok = false
+        NSFileCoordinator().coordinate(readingItemAt: src, options: [], error: &error) { url in
+            if (try? fm.copyItem(at: url, to: dst)) != nil {
+                ok = true
+            }
+        }
+        return error == nil && ok ? true : nil
     }
 
     private func reload() {
