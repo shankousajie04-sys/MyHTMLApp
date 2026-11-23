@@ -94,7 +94,6 @@ let sampleApps: [AppItem] = [
 
 // MARK: - メインの5タブ画面
 struct ContentView: View {
-    // お気に入り保存用（アプリを閉じても消えないように文字列で保存）
     @AppStorage("savedAppIDs") private var savedIDsString = ""
 
     var savedIDs: Set<String> {
@@ -151,7 +150,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 1. おすすめタブ（ピックアップカード＆人気ランキング）
+// MARK: - 1. おすすめタブ
 struct TodayView: View {
     let savedIDs: Set<String>
     let onToggleSave: (String) -> Void
@@ -160,7 +159,6 @@ struct TodayView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    // ピックアップバナー
                     if let featured = sampleApps.first {
                         NavigationLink(value: featured) {
                             VStack(alignment: .leading, spacing: 12) {
@@ -189,7 +187,6 @@ struct TodayView: View {
                         }
                     }
 
-                    // 注目リスト
                     VStack(alignment: .leading, spacing: 12) {
                         Text("人気のアプリ")
                             .font(.title3.bold())
@@ -240,7 +237,7 @@ struct CategoryListView: View {
     }
 }
 
-// MARK: - 4. 検索タブ（リアルタイム検索バー＆ジャンル絞り込みボタン）
+// MARK: - 4. 検索タブ
 struct SearchView: View {
     @State private var searchText = ""
     @State private var selectedCategory = "すべて"
@@ -262,7 +259,6 @@ struct SearchView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // 横スクロールできるジャンル選択ボタン
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(categories, id: \.self) { category in
@@ -283,7 +279,6 @@ struct SearchView: View {
                     .padding(.vertical, 10)
                 }
 
-                // 検索結果リスト
                 List(filteredApps) { app in
                     AppRowView(
                         app: app,
@@ -295,14 +290,14 @@ struct SearchView: View {
                 .listStyle(.plain)
             }
             .navigationTitle("アプリを探す")
-.searchable(text: $searchText, prompt: "アプリ名・キーワードを入力")
-.navigationDestination(for: AppItem.self) { app in
+            .searchable(text: $searchText, prompt: "アプリ名・キーワードを入力")
+            .navigationDestination(for: AppItem.self) { app in
 AppDetailView(app: app, isSaved: savedIDs.contains(app.id), onToggleSave: { onToggleSave(app.id) })
 }
 }
 }
 }
-// MARK: - 5. 保存済み（お気に入り）タブ
+// MARK: - 5. 保存済みタブ
 struct SavedAppsView: View {
 let savedIDs: Set
 let onToggleSave: (String) -> Void
@@ -343,7 +338,7 @@ AppDetailView(app: app, isSaved: true, onToggleSave: { onToggleSave(app.id) })
 }
 }
 }
-// MARK: - 共通部品：アプリの1行表示＆「入手」ボタン
+// MARK: - 共通部品：アプリの1行表示
 struct AppRowView: View {
 let app: AppItem
 let isSaved: Bool
@@ -365,10 +360,10 @@ HStack(spacing: 4) {
 Image(systemName: "star.fill")
 .font(.caption2)
 .foregroundStyle(.orange)
-Text(String(format: "%.1f", app.rating))
+Text(app.rating.formatted(.number.precision(.fractionLength(1))))
 .font(.caption2.bold())
 .foregroundStyle(.secondary)
-Text("・(app.category)")
+Text("・" + app.category)
 .font(.caption2)
 .foregroundStyle(.secondary)
 }
@@ -376,7 +371,6 @@ Text("・(app.category)")
 }
 }
 Spacer()
-// 「入手 / 保存済み」ボタン
 Button {
 onToggleSave()
 } label: {
@@ -435,13 +429,12 @@ Image(systemName: "square.and.arrow.up")
 }
 }
 Divider()
-// 評価・カテゴリ情報
 HStack {
 VStack {
 Text("評価")
 .font(.caption)
 .foregroundStyle(.secondary)
-Text("★ (String(format: "%.1f", app.rating))")
+Text("★ " + app.rating.formatted(.number.precision(.fractionLength(1))))
 .font(.headline)
 }
 .frame(maxWidth: .infinity)
@@ -457,7 +450,6 @@ Text(app.category)
 }
 .padding(.vertical, 8)
 Divider()
-// アプリ説明文
 VStack(alignment: .leading, spacing: 8) {
 Text("このアプリについて")
 .font(.headline)
@@ -490,3 +482,5 @@ Image(systemName: iconName)
 .clipShape(RoundedRectangle(cornerRadius: size * 0.22))
 }
 }
+
+
