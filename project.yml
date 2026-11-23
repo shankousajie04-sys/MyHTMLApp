@@ -9,18 +9,9 @@ targets:
     platform: iOS
     sources:
       - path: ContentView.swift
+      - path: Assets.xcassets
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-        INFOPLIST_KEY_CFBundleDisplayName: iZip
-    info:
-      path: Info.plist
-      properties:
-        UILaunchScreen: {}
-        LSSupportsOpeningDocumentsInPlace: true
-        CFBundleDocumentTypes:
-          - CFBundleTypeName: ZIP Archive
-            LSHandlerRank: Alternate
-            LSItemContentTypes:
-              - public.zip-archive
-              - com.pkware.zip-archive
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_CFBundleDisplayName: ZIP解凍箱
