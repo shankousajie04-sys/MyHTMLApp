@@ -1,4 +1,3 @@
-
 name: MyHTMLApp
 
 options:
@@ -19,4 +18,5 @@ targets:
         PRODUCT_NAME: MyHTMLApp
         INFOPLIST_KEY_CFBundleDisplayName: MyHTMLApp
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
         SWIFT_VERSION: "5.0"
