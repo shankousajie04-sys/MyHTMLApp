@@ -1,3 +1,4 @@
+
 name: MyHTMLApp
 
 options:
@@ -10,10 +11,12 @@ targets:
     deploymentTarget: "15.0"
     sources:
       - path: ContentView.swift
+    resources:
       - path: index.html
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.myhtmlapp
+        PRODUCT_NAME: MyHTMLApp
         INFOPLIST_KEY_CFBundleDisplayName: MyHTMLApp
-        SWIFT_VERSION: 5.0
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.0"
