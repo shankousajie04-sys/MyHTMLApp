@@ -1,22 +1,26 @@
 name: MyHTMLApp
-
 options:
   bundleIdPrefix: com.example
-
+  deploymentTarget:
+    iOS: "15.0"
 targets:
   MyHTMLApp:
     type: application
     platform: iOS
-    deploymentTarget: "15.0"
     sources:
       - path: ContentView.swift
-    resources:
-      - path: index.html
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.example.myhtmlapp
-        PRODUCT_NAME: MyHTMLApp
-        INFOPLIST_KEY_CFBundleDisplayName: MyHTMLApp
-        GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_UILaunchScreen_Generation: YES
-        SWIFT_VERSION: "5.0"
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        INFOPLIST_KEY_CFBundleDisplayName: iZip
+    info:
+      path: Info.plist
+      properties:
+        UILaunchScreen: {}
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: ZIP Archive
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.zip-archive
+              - com.pkware.zip-archive
