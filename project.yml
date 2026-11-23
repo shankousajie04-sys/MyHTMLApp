@@ -13,3 +13,6 @@ targets:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
         GENERATE_INFOPLIST_FILE: "YES"
+    info:
+      properties:
+        UILaunchScreen: {}
