@@ -219,7 +219,8 @@ struct ContentView: View {
             }
             try fm.createDirectory(at: inboxCopyDir, withIntermediateDirectories: true)
 
-            let copiedURL = inboxCopyDir.appendingPathComponent(sourceURL.lastPathComponent)
+            let fileName = sourceURL.lastPathComponent.isEmpty ? "archive.zip" : sourceURL.lastPathComponent
+            let copiedURL = inboxCopyDir.appendingPathComponent(fileName)
             if fm.fileExists(atPath: copiedURL.path) {
                 try fm.removeItem(at: copiedURL)
             }
@@ -233,7 +234,7 @@ struct ContentView: View {
             try fm.createDirectory(at: rootDir, withIntermediateDirectories: true)
 
             let count = try ZipUnpacker.unpack(data: data, to: rootDir)
-            zipName = sourceURL.lastPathComponent
+            zipName = fileName
             reload()
             message = "「\(zipName)」から \(count) 個のファイルを取り出しました。"
             showMessage = true
@@ -563,9 +564,9 @@ enum ZipUnpacker {
                 guard off + 30 <= data.count, data.u32(off) == 0x04034b50 else { continue }
                 let start = off + 30 + Int(data.u16(off + 26)) + Int(data.u16(off + 28))
                 let end = start + Int(e.compSize)
-                guard end <= data.count else { continue }
-                let raw = try decode(data.subdata(in: start..<end), method: e.method, uncompSize: Int(e.uncompSize))
-                let clean = e.name.split(separator: "/").filter { $0 != "." && $0 != ".." }.joined(separator: "/")
+                guard start >= 0, end <= data.count, start <= end else { continue }
+                let raw = try decode(Data(data.subdata(in: start..<end)), method: e.method, uncompSize: Int(e.uncompSize))
+                let clean = sanitizePath(e.name)
                 guard !clean.isEmpty else { continue }
                 let out = dir.appendingPathComponent(clean)
                 try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -585,11 +586,12 @@ enum ZipUnpacker {
             let nStart = off + 30
             let pStart = nStart + nLen + eLen
             let pEnd = pStart + comp
-            guard pEnd <= data.count else { break }
-            let name = String(data: data.subdata(in: nStart..<(nStart + nLen)), encoding: .utf8) ?? "file_\(count)"
+            guard pEnd <= data.count, pStart <= pEnd else { break }
+            let nameData = Data(data.subdata(in: nStart..<(nStart + nLen)))
+            let name = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .shiftJIS) ?? "file_\(count)"
             if !name.hasSuffix("/") && !name.contains("__MACOSX") {
-                let raw = try decode(data.subdata(in: pStart..<pEnd), method: method, uncompSize: uncomp)
-                let clean = name.split(separator: "/").filter { $0 != "." && $0 != ".." }.joined(separator: "/")
+                let raw = try decode(Data(data.subdata(in: pStart..<pEnd)), method: method, uncompSize: uncomp)
+                let clean = sanitizePath(name)
                 if !clean.isEmpty {
                     let out = dir.appendingPathComponent(clean)
                     try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -599,25 +601,54 @@ enum ZipUnpacker {
             }
             off = pEnd
         }
-        guard count > 0 else { throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "解凍できるファイルがありません"]) }
+        guard count > 0 else {
+            throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "解凍できるファイルがありません"])
+        }
         return count
     }
 
-    private struct Entry { let method: UInt16; let compSize: UInt32; let uncompSize: UInt32; let localOffset: UInt32; let name: String }
+    private static func sanitizePath(_ rawPath: String) -> String {
+        rawPath
+            .replacingOccurrences(of: "\\", with: "/")
+            .split(separator: "/")
+            .filter { $0 != "." && $0 != ".." && !$0.isEmpty }
+            .joined(separator: "/")
+    }
+
+    private struct Entry {
+        let method: UInt16
+        let compSize: UInt32
+        let uncompSize: UInt32
+        let localOffset: UInt32
+        let name: String
+    }
 
     private static func readCentralDirectory(_ data: Data) -> [Entry]? {
         guard data.count >= 22 else { return nil }
-        guard let eocd = (max(0, data.count - 65557)...(data.count - 22)).reversed().first(where: { data.u32($0) == 0x06054b50 }) else { return nil }
+        let searchStart = max(0, data.count - 65557)
+        let searchEnd = data.count - 22
+        guard searchStart <= searchEnd,
+              let eocd = (searchStart...searchEnd).reversed().first(where: { data.u32($0) == 0x06054b50 }) else {
+            return nil
+        }
         let total = Int(data.u16(eocd + 10))
         var cur = Int(data.u32(eocd + 16))
         var res: [Entry] = []
         for _ in 0..<total {
             guard cur + 46 <= data.count, data.u32(cur) == 0x02014b50 else { break }
-            let nLen = Int(data.u16(cur + 28)), eLen = Int(data.u16(cur + 30)), cLen = Int(data.u16(cur + 32))
+            let nLen = Int(data.u16(cur + 28))
+            let eLen = Int(data.u16(cur + 30))
+            let cLen = Int(data.u16(cur + 32))
             guard cur + 46 + nLen <= data.count else { break }
-            let nameData = data.subdata(in: (cur + 46)..<(cur + 46 + nLen))
+            let nameData = Data(data.subdata(in: (cur + 46)..<(cur + 46 + nLen)))
             let name = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .shiftJIS) ?? "item"
-            res.append(Entry(method: data.u16(cur + 10), compSize: data.u32(cur + 20), uncompSize: data.u32(cur + 24), localOffset: data.u32(cur + 42), name: name))
+            res.append(Entry(
+                method: data.u16(cur + 10),
+                compSize: data.u32(cur + 20),
+                uncompSize: data.u32(cur + 24),
+                localOffset: data.u32(cur + 42),
+                name: name
+            ))
             cur += 46 + nLen + eLen + cLen
         }
         return res
@@ -626,21 +657,81 @@ enum ZipUnpacker {
     private static func decode(_ src: Data, method: UInt16, uncompSize: Int) throws -> Data {
         if method == 0 { return src }
         if method == 8 {
-            if uncompSize == 0 { return Data() }
-            let cap = max(uncompSize, 64)
-            var dst = [UInt8](repeating: 0, count: cap)
-            let outSize = src.withUnsafeBytes { ptr -> Int in
-                guard let base = ptr.bindMemory(to: UInt8.self).baseAddress else { return 0 }
-                return compression_decode_buffer(&dst, cap, base, src.count, nil, COMPRESSION_ZLIB)
+            if src.isEmpty { return Data() }
+            if let streamDecoded = decompressStream(src: src, initialHint: uncompSize) {
+                return streamDecoded
             }
-            guard outSize > 0 else { throw NSError(domain: "ZIP解凍箱", code: 2, userInfo: [NSLocalizedDescriptionKey: "解凍エラー"]) }
-            return Data(dst.prefix(outSize))
+            // 生DEFLATEストリーム向けにzlibヘッダ/フッタを付与して再試行
+            var wrapped = Data([0x78, 0x9C])
+            wrapped.append(src)
+            wrapped.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
+            if let wrappedDecoded = decompressStream(src: wrapped, initialHint: uncompSize) {
+                return wrappedDecoded
+            }
+            throw NSError(domain: "ZIP解凍箱", code: 2, userInfo: [NSLocalizedDescriptionKey: "解凍エラー"])
         }
         throw NSError(domain: "ZIP解凍箱", code: 3, userInfo: [NSLocalizedDescriptionKey: "未対応形式(\(method))"])
+    }
+
+    private static func decompressStream(src: Data, initialHint: Int) -> Data? {
+        var stream = compression_stream(
+            dst_ptr: UnsafeMutablePointer<UInt8>.allocate(capacity: 1),
+            dst_size: 0,
+            src_ptr: UnsafePointer<UInt8>(bitPattern: 1)!,
+            src_size: 0,
+            state: nil
+        )
+        stream.dst_ptr.deallocate()
+
+        let status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+        guard status == COMPRESSION_STATUS_OK else { return nil }
+        defer { compression_stream_destroy(&stream) }
+
+        let chunkSize = max(initialHint > 0 ? min(initialHint, 1024 * 1024) : 65536, 16384)
+        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+        defer { dstBuffer.deallocate() }
+
+        var output = Data(capacity: max(initialHint, 1024))
+
+        return src.withUnsafeBytes { rawBuf -> Data? in
+            guard let base = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return nil }
+            stream.src_ptr = base
+            stream.src_size = src.count
+
+            while true {
+                stream.dst_ptr = dstBuffer
+                stream.dst_size = chunkSize
+                let flags: Int32 = (stream.src_size == 0) ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
+                let res = compression_stream_process(&stream, flags)
+                let produced = chunkSize - stream.dst_size
+                if produced > 0 {
+                    output.append(dstBuffer, count: produced)
+                }
+
+                switch res {
+                case COMPRESSION_STATUS_END:
+                    return output
+                case COMPRESSION_STATUS_OK:
+                    continue
+                default:
+                    return nil
+                }
+            }
+        }
     }
 }
 
 private extension Data {
-    func u16(_ o: Int) -> UInt16 { UInt16(self[o]) | (UInt16(self[o + 1]) << 8) }
-    func u32(_ o: Int) -> UInt32 { UInt32(self[o]) | (UInt32(self[o + 1]) << 8) | (UInt32(self[o + 2]) << 16) | (UInt32(self[o + 3]) << 24) }
+    func u16(_ o: Int) -> UInt16 {
+        let i = startIndex + o
+        return UInt16(self[i]) | (UInt16(self[i + 1]) << 8)
+    }
+
+    func u32(_ o: Int) -> UInt32 {
+        let i = startIndex + o
+        return UInt32(self[i])
+            | (UInt32(self[i + 1]) << 8)
+            | (UInt32(self[i + 2]) << 16)
+            | (UInt32(self[i + 3]) << 24)
+    }
 }
