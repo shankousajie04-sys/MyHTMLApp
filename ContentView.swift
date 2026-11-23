@@ -46,35 +46,81 @@ struct ContentView: View {
 
 struct AppListView: View {
     let title: String, list: [AppItem], saved: Set<String>, toggle: (String) -> Void
+
     var body: some View {
-        NavigationStack {
-            List(list) { item in
-                HStack(spacing: 12) {
-                    NavigationLink(value: item) {
-                        Image(systemName: item.icon).foregroundStyle(.white)
-                            .frame(width: 48, height: 48).background(item.color).clipShape(RoundedRectangle(cornerRadius: 12))
+        if #available(iOS 16.0, *) {
+            NavigationStack {
+                rows
+                    .navigationTitle(title)
+                    .navigationDestination(for: AppItem.self) { item in
+                        AppDetailView(item: item, saved: saved, toggle: toggle)
+                    }
+            }
+        } else {
+            NavigationView {
+                rows
+                    .navigationTitle(title)
+            }
+            .navigationViewStyle(.stack)
+        }
+    }
+
+    private var rows: some View {
+        List(list) { item in
+            HStack(spacing: 12) {
+                destinationLink(for: item) {
+                    HStack(spacing: 12) {
+                        Image(systemName: item.icon)
+                            .foregroundColor(.white)
+                            .frame(width: 48, height: 48)
+                            .background(item.color)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
                         VStack(alignment: .leading) {
                             Text(item.name).font(.headline)
-                            Text(item.desc).font(.caption).foregroundStyle(.secondary)
+                            Text(item.desc).font(.caption).foregroundColor(.secondary)
                         }
                     }
-                    Button(saved.contains(item.id) ? "保存済" : "入手") { toggle(item.id) }
-                        .buttonStyle(.bordered).tint(saved.contains(item.id) ? .gray : .blue)
                 }
-            }
-            .navigationTitle(title)
-            .navigationDestination(for: AppItem.self) { item in
-                VStack(spacing: 20) {
-                    Image(systemName: item.icon).font(.largeTitle).foregroundStyle(.white)
-                        .frame(width: 80, height: 80).background(item.color).clipShape(RoundedRectangle(cornerRadius: 18))
-                    Text(item.name).font(.title.bold())
-                    Text(item.cat).font(.caption).padding(6).background(.quaternary).clipShape(Capsule())
-                    Text(item.desc).foregroundStyle(.secondary)
-                    Button(saved.contains(item.id) ? "保存済み" : "入手する") { toggle(item.id) }
-                        .buttonStyle(.borderedProminent)
-                }.padding()
+                Spacer()
+                Button(saved.contains(item.id) ? "保存済" : "入手") { toggle(item.id) }
+                    .buttonStyle(.bordered)
+                    .tint(saved.contains(item.id) ? .gray : .blue)
             }
         }
+    }
+
+    @ViewBuilder
+    private func destinationLink<Label: View>(for item: AppItem, @ViewBuilder label: () -> Label) -> some View {
+        if #available(iOS 16.0, *) {
+            NavigationLink(value: item, label: label)
+        } else {
+            NavigationLink(destination: AppDetailView(item: item, saved: saved, toggle: toggle), label: label)
+        }
+    }
+}
+
+struct AppDetailView: View {
+    let item: AppItem, saved: Set<String>, toggle: (String) -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: item.icon)
+                .font(.largeTitle)
+                .foregroundColor(.white)
+                .frame(width: 80, height: 80)
+                .background(item.color)
+                .clipShape(RoundedRectangle(cornerRadius: 18))
+            Text(item.name).font(.title.bold())
+            Text(item.cat)
+                .font(.caption)
+                .padding(6)
+                .background(Color(.systemGray5))
+                .clipShape(Capsule())
+            Text(item.desc).foregroundColor(.secondary)
+            Button(saved.contains(item.id) ? "保存済み" : "入手する") { toggle(item.id) }
+                .buttonStyle(.borderedProminent)
+        }
+        .padding()
     }
 }
 
@@ -85,17 +131,24 @@ struct SearchTab: View {
     let cats = ["すべて", "アクション", "リズム", "音楽", "お絵描き", "開発"]
 
     var body: some View {
-        let filtered = apps.filter { (cat == "すべて" || $0.cat == cat) && (text.isEmpty || $0.name.localizedCaseInsensitiveContains(text)) }
-        AppListView(title: "検索", list: filtered, saved: saved, toggle: toggle)
-            .searchable(text: $text, prompt: "アプリ名で検索")
-            .safeAreaInset(edge: .top) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack {
-                        ForEach(cats, id: \.self) { c in
-                            Button(c) { cat = c }.buttonStyle(.borderedProminent).tint(cat == c ? .blue : .gray)
-                        }
-                    }.padding(.horizontal)
+        let filtered = apps.filter {
+            (cat == "すべて" || $0.cat == cat) &&
+            (text.isEmpty || $0.name.localizedCaseInsensitiveContains(text))
+        }
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack {
+                    ForEach(cats, id: \.self) { c in
+                        Button(c) { cat = c }
+                            .buttonStyle(.borderedProminent)
+                            .tint(cat == c ? .blue : .gray)
+                    }
                 }
+                .padding(.horizontal)
+                .padding(.vertical, 8)
             }
+            AppListView(title: "検索", list: filtered, saved: saved, toggle: toggle)
+        }
+        .searchable(text: $text, prompt: "アプリ名で検索")
     }
 }
