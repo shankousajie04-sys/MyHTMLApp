@@ -18,6 +18,8 @@ struct ExtractedFile: Identifiable, Hashable {
 }
 
 struct ContentView: View {
+    private let appDisplayName = "ZIP解凍箱"
+
     @State private var files: [ExtractedFile] = []
     @State private var zipName = "未選択"
     @State private var showPicker = false
@@ -31,16 +33,22 @@ struct ContentView: View {
 
     private var rootDir: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Extracted", isDirectory: true)
+            .appendingPathComponent("ZIP解凍箱_展開済み", isDirectory: true)
+    }
+
+    private var inboxCopyDir: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("ZIP解凍箱_取込一時", isDirectory: true)
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
-                HStack {
+                HStack(spacing: 12) {
+                    AppIconView(size: 46)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("ZIP: \(zipName)").font(.subheadline.bold()).lineLimit(1)
-                        Text("ファイルアプリでZIPを選択 → 共有からこのアプリを選択").font(.caption2).foregroundColor(.secondary)
+                        Text(appDisplayName).font(.headline)
+                        Text("ZIP: \(zipName)").font(.caption).foregroundColor(.secondary).lineLimit(1)
                     }
                     Spacer()
                     if !files.isEmpty {
@@ -56,14 +64,24 @@ struct ContentView: View {
                 .background(Color(.secondarySystemBackground))
 
                 if files.isEmpty {
-                    VStack(spacing: 14) {
-                        Image(systemName: "doc.zipper").font(.system(size: 50)).foregroundColor(.orange)
-                        Text("ZIPの中身を全部バラバラに展開").font(.headline)
-                        Text("1. 「ファイル」アプリでZIPを選択\n2. 「共有」からこのアプリを選ぶ\n3. 中身のファイルが全部表示されます")
-                            .font(.caption).foregroundColor(.secondary)
-                            .padding().background(Color(.secondarySystemBackground)).clipShape(RoundedRectangle(cornerRadius: 12))
-                        Button("ZIPファイルを選ぶ") { showPicker = true }
-                            .buttonStyle(.borderedProminent)
+                    VStack(spacing: 16) {
+                        AppIconView(size: 84)
+                        Text(appDisplayName).font(.title2.bold())
+                        Text("ZIPの中身を全部バラバラに展開します\n「ファイル」アプリから選ぶか、共有から送ってください")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 24)
+
+                        Button {
+                            showPicker = true
+                        } label: {
+                            Label("ZIPファイルを選ぶ", systemImage: "folder.badge.plus")
+                                .font(.headline)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 4)
+                        }
+                        .buttonStyle(.borderedProminent)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
@@ -71,8 +89,9 @@ struct ContentView: View {
                         ForEach(files) { file in
                             HStack(spacing: 12) {
                                 Image(systemName: icon(for: file.url))
-                                    .foregroundColor(.blue).frame(width: 28)
-                                VStack(alignment: .leading) {
+                                    .foregroundColor(.orange)
+                                    .frame(width: 28)
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(file.name).font(.body.weight(.medium)).lineLimit(1)
                                     Text("\(formatSize(file.size))\(file.path != file.name ? " • \(file.path)" : "")")
                                         .font(.caption).foregroundColor(.secondary).lineLimit(1)
@@ -97,7 +116,7 @@ struct ContentView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("iZip")
+            .navigationTitle(appDisplayName)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
@@ -119,12 +138,9 @@ struct ContentView: View {
         .navigationViewStyle(.stack)
         .onAppear(perform: reload)
         .onOpenURL { url in extract(url) }
-        .fileImporter(
-            isPresented: $showPicker,
-            allowedContentTypes: [.zip, UTType(filenameExtension: "zip") ?? .data]
-        ) { result in
-            if case .success(let url) = result {
-                extract(url)
+        .sheet(isPresented: $showPicker) {
+            ZipDocumentPicker { pickedURL in
+                extract(pickedURL)
             }
         }
         .sheet(item: $previewFile) { file in
@@ -161,23 +177,54 @@ struct ContentView: View {
         .sheet(isPresented: $showShare) {
             ShareView(items: shareItems)
         }
-        .alert("iZip", isPresented: $showMessage) {
+        .alert(appDisplayName, isPresented: $showMessage) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(message)
         }
     }
 
-    private func extract(_ url: URL) {
-        let ok = url.startAccessingSecurityScopedResource()
-        defer { if ok { url.stopAccessingSecurityScopedResource() } }
+    private func extract(_ sourceURL: URL) {
+        let ok = sourceURL.startAccessingSecurityScopedResource()
+        defer { if ok { sourceURL.stopAccessingSecurityScopedResource() } }
+
         do {
-            let data = try Data(contentsOf: url)
             let fm = FileManager.default
+            if fm.fileExists(atPath: inboxCopyDir.path) {
+                try fm.removeItem(at: inboxCopyDir)
+            }
+            try fm.createDirectory(at: inboxCopyDir, withIntermediateDirectories: true)
+
+            let copiedURL = inboxCopyDir.appendingPathComponent(sourceURL.lastPathComponent)
+            if fm.fileExists(atPath: copiedURL.path) {
+                try fm.removeItem(at: copiedURL)
+            }
+
+            var readError: NSError?
+            var copySuccess = false
+            let coordinator = NSFileCoordinator()
+            coordinator.coordinate(readingItemAt: sourceURL, options: [], error: &readError) { coordinatedURL in
+                do {
+                    try fm.copyItem(at: coordinatedURL, to: copiedURL)
+                    copySuccess = true
+                } catch {
+                    readError = error as NSError
+                }
+            }
+
+            if !copySuccess {
+                try fm.copyItem(at: sourceURL, to: copiedURL)
+            }
+            if let err = readError, !copySuccess {
+                throw err
+            }
+
+            let data = try Data(contentsOf: copiedURL)
             if fm.fileExists(atPath: rootDir.path) { try fm.removeItem(at: rootDir) }
             try fm.createDirectory(at: rootDir, withIntermediateDirectories: true)
+
             let count = try ZipUnpacker.unpack(data: data, to: rootDir)
-            zipName = url.lastPathComponent
+            zipName = sourceURL.lastPathComponent
             reload()
             message = "「\(zipName)」から \(count) 個のファイルを取り出しました。"
             showMessage = true
@@ -228,6 +275,61 @@ struct ContentView: View {
 
     private func formatSize(_ bytes: Int64) -> String {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    }
+}
+
+struct AppIconView: View {
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                gradient: Gradient(colors: [Color.orange, Color.pink]),
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+            Image(systemName: "archivebox.fill")
+                .font(.system(size: size * 0.48, weight: .bold))
+                .foregroundColor(.white)
+        }
+        .frame(width: size, height: size)
+        .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+        .shadow(color: Color.orange.opacity(0.3), radius: size * 0.08, x: 0, y: size * 0.04)
+    }
+}
+
+struct ZipDocumentPicker: UIViewControllerRepresentable {
+    let onPick: (URL) -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let types: [UTType] = [
+            .zip,
+            UTType(filenameExtension: "zip") ?? .data,
+            .archive,
+            .data,
+            .item
+        ]
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onPick: (URL) -> Void
+        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            if let first = urls.first {
+                onPick(first)
+            }
+        }
     }
 }
 
@@ -286,7 +388,7 @@ enum ZipUnpacker {
             }
             off = pEnd
         }
-        guard count > 0 else { throw NSError(domain: "iZip", code: 1, userInfo: [NSLocalizedDescriptionKey: "解凍できるファイルがありません"]) }
+        guard count > 0 else { throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "解凍できるファイルがありません"]) }
         return count
     }
 
@@ -320,10 +422,10 @@ enum ZipUnpacker {
                 guard let base = ptr.bindMemory(to: UInt8.self).baseAddress else { return 0 }
                 return compression_decode_buffer(&dst, cap, base, src.count, nil, COMPRESSION_ZLIB)
             }
-            guard outSize > 0 else { throw NSError(domain: "iZip", code: 2, userInfo: [NSLocalizedDescriptionKey: "解凍エラー"]) }
+            guard outSize > 0 else { throw NSError(domain: "ZIP解凍箱", code: 2, userInfo: [NSLocalizedDescriptionKey: "解凍エラー"]) }
             return Data(dst.prefix(outSize))
         }
-        throw NSError(domain: "iZip", code: 3, userInfo: [NSLocalizedDescriptionKey: "未対応形式(\(method))"])
+        throw NSError(domain: "ZIP解凍箱", code: 3, userInfo: [NSLocalizedDescriptionKey: "未対応形式(\(method))"])
     }
 }
 
