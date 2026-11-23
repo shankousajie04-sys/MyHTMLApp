@@ -1,52 +1,26 @@
-
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>BLOCK BREAKER</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#080d1b;color:white;font-family:Arial;text-align:center;overflow:hidden}
-h1{color:#53eaff;letter-spacing:4px;margin:24px 0 8px}
-#info{display:flex;justify-content:space-around;font-size:18px;margin:15px}
-canvas{background:#101a30;border:2px solid #31577b;border-radius:12px;width:94vw;max-width:420px;touch-action:none}
-button{background:#53eaff;color:#07101c;border:0;border-radius:12px;padding:14px 30px;font-size:18px;font-weight:bold;margin:16px}
-</style>
-</head>
-<body>
-<h1>BLOCK BREAKER</h1>
-<div id="info"><span> SCORE: <b id="score">0</b></span><span> LIFE: <b id="life">3</b></span></div>
-<canvas id="game" width="400" height="550"></canvas>
-<div><button onclick="start()">START / RETRY</button></div>
-<script>
-const c=document.getElementById("game"),ctx=c.getContext("2d");
-let x=200,y=430,dx=3,dy=-4,paddle=160,score=0,life=3,blocks=[],playing=false;
-function resetBlocks(){
- blocks=[];
- for(let r=0;r<5;r++)for(let col=0;col<8;col++)
- blocks.push({x:8+col*49,y:45+r*27,w:43,h:19,on:true});
-}
-function start(){x=200;y=430;dx=3;dy=-4;paddle=160;score=0;life=3;playing=true;resetBlocks();update()}
-function draw(){
- ctx.clearRect(0,0,400,550);
- blocks.forEach((b,i)=>{if(b.on){ctx.fillStyle=["#ff4f8b","#ffad42","#f4ed58","#53eaff","#a77bff"][Math.floor(i/8)];ctx.fillRect(b.x,b.y,b.w,b.h)}});
- ctx.fillStyle="#53eaff";ctx.fillRect(paddle,510,80,12);
- ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fillStyle="white";ctx.fill();
-}
-function update(){
- if(!playing)return;
- x+=dx;y+=dy;
- if(x<8||x>392)dx=-dx;
- if(y<8)dy=-dy;
- if(y>510&&y<530&&x>paddle&&x<paddle+80)dy=-Math.abs(dy);
- blocks.forEach(b=>{if(b.on&&x>b.x&&x<b.x+b.w&&y>b.y&&y<b.y+b.h){b.on=false;dy=-dy;score+=10;document.getElementById("score").textContent=score}});
- if(y>550){life--;document.getElementById("life").textContent=life;if(life<=0){playing=false;alert("GAME OVER! SCORE: "+score);return}x=200;y=430;dx=3;dy=-4}
- if(blocks.every(b=>!b.on)){playing=false;alert("CLEAR!! SCORE: "+score);return}
- draw();requestAnimationFrame(update);
-}
-c.addEventListener("pointermove",e=>{let rect=c.getBoundingClientRect();paddle=Math.max(0,Math.min(320,(e.clientX-rect.left)*400/rect.width-40))});
-resetBlocks();draw();
-</script>
-</body>
-</html>
+name: MyHTMLApp
+options:
+  bundleIdPrefix: com.example
+  deploymentTarget:
+    iOS: "15.0"
+targets:
+  MyHTMLApp:
+    type: application
+    platform: iOS
+    sources:
+      - path: ContentView.swift
+    settings:
+      base:
+        IPHONEOS_DEPLOYMENT_TARGET: "15.0"
+        GENERATE_INFOPLIST_FILE: "YES"
+        INFOPLIST_KEY_CFBundleDisplayName: ZIP解凍箱
+    info:
+      properties:
+        UILaunchScreen: {}
+        LSSupportsOpeningDocumentsInPlace: true
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: ZIP Archive
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - public.zip-archive
+              - com.pkware.zip-archive
