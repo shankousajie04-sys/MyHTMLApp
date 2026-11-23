@@ -123,8 +123,8 @@ struct ContentView: View {
             isPresented: $showPicker,
             allowedContentTypes: [.zip, UTType(filenameExtension: "zip") ?? .data]
         ) { result in
-            if case .success(let urls) = result, let first = urls.first {
-                extract(first)
+            if case .success(let url) = result {
+                extract(url)
             }
         }
         .sheet(item: $previewFile) { file in
