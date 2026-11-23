@@ -1,0 +1,19 @@
+name: MyHTMLApp
+
+options:
+  bundleIdPrefix: com.example
+
+targets:
+  MyHTMLApp:
+    type: application
+    platform: iOS
+    deploymentTarget: "15.0"
+    sources:
+      - path: ContentView.swift
+      - path: index.html
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.myhtmlapp
+        INFOPLIST_KEY_CFBundleDisplayName: MyHTMLApp
+        SWIFT_VERSION: 5.0
