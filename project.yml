@@ -12,4 +12,4 @@ targets:
     settings:
       base:
         IPHONEOS_DEPLOYMENT_TARGET: "15.0"
-        INFOPLIST_KEY_CFBundleDisplayName: ZIP解凍箱
+        GENERATE_INFOPLIST_FILE: "YES"
