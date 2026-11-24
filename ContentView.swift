@@ -1,65 +1,135 @@
 import SwiftUI
-import UniformTypeIdentifiers
-import Compression
-import AVFoundation
 
 @main
-struct MyHTMLAppApp: App {
+struct VendingManagerApp: App {
     var body: some Scene {
         WindowGroup { ContentView() }
     }
 }
 
-struct ExtractedFile: Identifiable, Hashable {
-    let id: String
-    let url: URL
-    let name: String
-    let path: String
-    let size: Int64
+// MARK: - データモデル
+
+enum MachineStatus: String, Codable {
+    case normal = "正常稼働"
+    case needsRestock = "要補充"
+    case outOfService = "故障・停止中"
 }
 
-struct ContentView: View {
-    private let appDisplayName = "ZIP解凍箱"
+struct DrinkSlot: Identifiable, Hashable, Codable {
+    let id: String
+    var name: String
+    var price: Int
+    var cost: Int
+    var currentStock: Int
+    var maxCapacity: Int
+    var reorderThreshold: Int
 
-    @State private var files: [ExtractedFile] = []
-    @State private var zipName = "未選択"
-    @State private var showPicker = false
+    var needsRestock: Bool {
+        currentStock <= reorderThreshold
+    }
+
+    var isSoldOut: Bool {
+        currentStock <= 0
+    }
+
+    var profitPerUnit: Int {
+        price - cost
+    }
+}
+
+struct SaleLog: Identifiable, Hashable, Codable {
+    let id: String
+    let date: Date
+    let machineId: String
+    let machineName: String
+    let productName: String
+    let price: Int
+    let profit: Int
+}
+
+struct VendingMachineItem: Identifiable, Hashable, Codable {
+    let id: String
+    var code: String
+    var locationName: String
+    var isOutOfService: Bool
+    var cashBox: Int
+    var slots: [DrinkSlot]
+
+    var status: MachineStatus {
+        if isOutOfService { return .outOfService }
+        if slots.contains(where: { $0.needsRestock }) { return .needsRestock }
+        return .normal
+    }
+
+    var totalStock: Int {
+        slots.reduce(0) { $0 + $1.currentStock }
+    }
+
+    var totalCapacity: Int {
+        slots.reduce(0) { $0 + $1.maxCapacity }
+    }
+}
+
+// MARK: - メイン画面
+
+struct ContentView: View {
+    private let appDisplayName = "自販機管理運営"
+
+    @State private var machines: [VendingMachineItem] = []
+    @State private var salesLogs: [SaleLog] = []
+    @State private var selectedMachineId: String?
+
+    @State private var showAddMachine = false
+    @State private var showAddSlot = false
+    @State private var showSalesHistory = false
     @State private var showDeviceInfo = false
 
-    @State private var previewFile: ExtractedFile?
-    @State private var previewText = ""
-    @State private var previewImage: UIImage?
-    @State private var audioFile: ExtractedFile?
-
+    @State private var selectedSlotForAction: DrinkSlot?
     @State private var shareItems: [Any] = []
     @State private var showShare = false
+
     @State private var message = ""
     @State private var showMessage = false
 
-    private var rootDir: URL {
+    private var saveFileURL: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ZIP解凍箱_展開済み", isDirectory: true)
+            .appendingPathComponent("vending_manager_state.json")
     }
 
-    private var inboxCopyDir: URL {
-        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("ZIP解凍箱_取込一時", isDirectory: true)
+    private var selectedMachine: VendingMachineItem? {
+        guard let id = selectedMachineId else { return machines.first }
+        return machines.first(where: { $0.id == id }) ?? machines.first
+    }
+
+    private var totalSalesAmount: Int {
+        salesLogs.reduce(0) { $0 + $1.price }
+    }
+
+    private var totalProfitAmount: Int {
+        salesLogs.reduce(0) { $0 + $1.profit }
+    }
+
+    private var totalCashInBoxes: Int {
+        machines.reduce(0) { $0 + $1.cashBox }
     }
 
     var body: some View {
         NavigationView {
             VStack(spacing: 0) {
+                // 上部サマリーヘッダー
                 HStack(spacing: 12) {
-                    ZipFileBadgeView(size: 46)
+                    VendingBadgeView(size: 46)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(appDisplayName).font(.headline)
-                        Text("対象: \(zipName)").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        Text("管理: \(machines.count)台 • 累計売上: ¥\(totalSalesAmount) (粗利 ¥\(totalProfitAmount))")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
                     Spacer()
-                    if !files.isEmpty {
-                        Button("一括保存") {
-                            shareItems = files.map(\.url)
-                            showShare = true
+                    if !salesLogs.isEmpty {
+                        Button("CSV出力") {
+                            exportCSV()
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.small)
@@ -68,57 +138,191 @@ struct ContentView: View {
                 .padding(12)
                 .background(Color(.secondarySystemBackground))
 
-                if files.isEmpty {
+                if machines.isEmpty {
+                    // 空状態（初期表示）
                     VStack(spacing: 16) {
-                        ZipFileBadgeView(size: 84)
+                        VendingBadgeView(size: 84)
                         Text(appDisplayName).font(.title2.bold())
-                        Text("ZIPやPayloadの中身を全部バラバラに展開します\n「ファイル」アプリから選ぶか、共有から送ってください")
+                        Text("設置した自販機の在庫補充・売上回収・稼働ステータスを一括管理します\nまずは管理する自販機を登録するか、サンプルデータを読み込んでください")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
                             .padding(.horizontal, 24)
 
                         Button {
-                            showPicker = true
+                            showAddMachine = true
                         } label: {
-                            Label("ZIP / Payloadを選ぶ", systemImage: "folder.badge.plus")
+                            Label("自販機を新規登録", systemImage: "plus.rectangle.on.rectangle")
                                 .font(.headline)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 4)
                         }
                         .buttonStyle(.borderedProminent)
+
+                        Button("サンプル自販機データを投入") {
+                            loadSampleData()
+                        }
+                        .font(.subheadline)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    List {
-                        ForEach(files) { file in
-                            HStack(spacing: 12) {
-                                Image(systemName: icon(for: file.url))
-                                    .foregroundColor(iconColor(for: file.url))
-                                    .frame(width: 28)
+                    // 自販機切替バー
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(machines) { machine in
+                                let isSelected = machine.id == selectedMachine?.id
+                                Button {
+                                    selectedMachineId = machine.id
+                                } label: {
+                                    HStack(spacing: 6) {
+                                        Circle()
+                                            .fill(statusColor(machine.status))
+                                            .frame(width: 8, height: 8)
+                                        Text("\(machine.code) \(machine.locationName)")
+                                            .font(.caption.weight(.semibold))
+                                    }
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(isSelected ? Color.blue : Color(.tertiarySystemFill))
+                                    .foregroundColor(isSelected ? .white : .primary)
+                                    .clipShape(Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                    }
+                    .background(Color(.systemGroupedBackground))
+
+                    if let machine = selectedMachine {
+                        // 選択中自販機のステータス＆操作バー
+                        VStack(spacing: 8) {
+                            HStack {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(file.name).font(.body.weight(.medium)).lineLimit(1)
-                                    Text("\(formatSize(file.size))\(file.path != file.name ? " • \(file.path)" : "")")
-                                        .font(.caption).foregroundColor(.secondary).lineLimit(1)
+                                    HStack(spacing: 6) {
+                                        Text(machine.locationName)
+                                            .font(.subheadline.bold())
+                                        Text(machine.status.rawValue)
+                                            .font(.caption2.bold())
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(statusColor(machine.status).opacity(0.15))
+                                            .foregroundColor(statusColor(machine.status))
+                                            .cornerRadius(4)
+                                    }
+                                    Text("金庫内売上: ¥\(machine.cashBox) • 総在庫: \(machine.totalStock)/\(machine.totalCapacity)本")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
                                 }
                                 Spacer()
-                                Button {
-                                    shareItems = [file.url]
-                                    showShare = true
+                                Menu {
+                                    Button {
+                                        restockAllSlots(in: machine.id)
+                                    } label: {
+                                        Label("全商品を一括満タン補充", systemImage: "arrow.triangle.2.circlepath")
+                                    }
+                                    Button {
+                                        collectCash(from: machine.id)
+                                    } label: {
+                                        Label("売上金を集金する (¥\(machine.cashBox))", systemImage: "yensign.circle")
+                                    }
+                                    Button {
+                                        toggleOutOfService(for: machine.id)
+                                    } label: {
+                                        Label(machine.isOutOfService ? "稼働再開にする" : "故障・メンテナンス停止にする", systemImage: "wrench.and.screwdriver")
+                                    }
+                                    Divider()
+                                    Button(role: .destructive) {
+                                        deleteMachine(id: machine.id)
+                                    } label: {
+                                        Label("この自販機を削除", systemImage: "trash")
+                                    }
                                 } label: {
-                                    Image(systemName: "square.and.arrow.up")
+                                    Image(systemName: "ellipsis.circle.fill")
+                                        .font(.title3)
+                                        .foregroundColor(.blue)
                                 }
-                                .buttonStyle(.borderless)
                             }
-                            .contentShape(Rectangle())
-                            .onTapGesture { open(file) }
+                            .padding(.horizontal, 12)
+                            .padding(.top, 8)
+
+                            Divider()
                         }
-                        .onDelete { offsets in
-                            offsets.forEach { try? FileManager.default.removeItem(at: files[$0].url) }
-                            reload()
+
+                        // 商品スロット一覧
+                        if machine.slots.isEmpty {
+                            VStack(spacing: 12) {
+                                Text("この自販機にはまだ商品が登録されていません")
+                                    .font(.subheadline)
+                                    .foregroundColor(.secondary)
+                                Button {
+                                    showAddSlot = true
+                                } label: {
+                                    Label("商品レーンを追加", systemImage: "plus.circle")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            List {
+                                ForEach(machine.slots) { slot in
+                                    HStack(spacing: 12) {
+                                        Image(systemName: slot.isSoldOut ? "xmark.circle.fill" : (slot.needsRestock ? "exclamationmark.triangle.fill" : "cup.and.saucer.fill"))
+                                            .foregroundColor(slot.isSoldOut ? .red : (slot.needsRestock ? .orange : .blue))
+                                            .frame(width: 28)
+
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            HStack(spacing: 6) {
+                                                Text(slot.name)
+                                                    .font(.body.weight(.medium))
+                                                    .lineLimit(1)
+                                                if slot.isSoldOut {
+                                                    Text("売切")
+                                                        .font(.caption2.bold())
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1)
+                                                        .background(Color.red.opacity(0.15))
+                                                        .foregroundColor(.red)
+                                                        .cornerRadius(4)
+                                                } else if slot.needsRestock {
+                                                    Text("要補充")
+                                                        .font(.caption2.bold())
+                                                        .padding(.horizontal, 5)
+                                                        .padding(.vertical, 1)
+                                                        .background(Color.orange.opacity(0.15))
+                                                        .foregroundColor(.orange)
+                                                        .cornerRadius(4)
+                                                }
+                                            }
+                                            Text("¥\(slot.price) (原価¥\(slot.cost)) • 在庫 \(slot.currentStock)/\(slot.maxCapacity)本")
+                                                .font(.caption)
+                                                .foregroundColor(.secondary)
+                                        }
+
+                                        Spacer()
+
+                                        Button {
+                                            simulatePurchase(machineId: machine.id, slotId: slot.id)
+                                        } label: {
+                                            Text("1本販売")
+                                                .font(.caption.bold())
+                                        }
+                                        .buttonStyle(.bordered)
+                                        .disabled(slot.isSoldOut || machine.isOutOfService)
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
+                                        selectedSlotForAction = slot
+                                    }
+                                }
+                                .onDelete { offsets in
+                                    deleteSlots(at: offsets, in: machine.id)
+                                }
+                            }
+                            .listStyle(.plain)
                         }
                     }
-                    .listStyle(.plain)
                 }
             }
             .navigationTitle(appDisplayName)
@@ -131,72 +335,88 @@ struct ContentView: View {
                         } label: {
                             Image(systemName: "info.circle")
                         }
-                        if !files.isEmpty {
-                            Button("全消去", role: .destructive) {
-                                try? FileManager.default.removeItem(at: rootDir)
-                                files = []
-                                zipName = "未選択"
+                        if !machines.isEmpty {
+                            Button {
+                                showSalesHistory = true
+                            } label: {
+                                Image(systemName: "chart.bar.doc.horizontal")
                             }
                         }
                     }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showPicker = true } label: {
-                        Image(systemName: "folder.badge.plus")
+                    HStack(spacing: 12) {
+                        if selectedMachine != nil {
+                            Button {
+                                showAddSlot = true
+                            } label: {
+                                Image(systemName: "cart.badge.plus")
+                            }
+                        }
+                        Button {
+                            showAddMachine = true
+                        } label: {
+                            Image(systemName: "plus.circle")
+                        }
                     }
                 }
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear(perform: reload)
-        .onOpenURL { url in extract(url) }
-        .sheet(isPresented: $showPicker) {
-            ZipDocumentPicker { pickedURL in
-                extract(pickedURL)
+        .onAppear(perform: loadState)
+        .sheet(isPresented: $showAddMachine) {
+            AddMachineSheet { code, location in
+                let newMachine = VendingMachineItem(
+                    id: UUID().uuidString,
+                    code: code,
+                    locationName: location,
+                    isOutOfService: false,
+                    cashBox: 0,
+                    slots: []
+                )
+                machines.append(newMachine)
+                selectedMachineId = newMachine.id
+                saveState()
             }
+        }
+        .sheet(isPresented: $showAddSlot) {
+            if let machine = selectedMachine {
+                AddSlotSheet(machineName: machine.locationName) { newSlot in
+                    if let idx = machines.firstIndex(where: { $0.id == machine.id }) {
+                        machines[idx].slots.append(newSlot)
+                        saveState()
+                    }
+                }
+            }
+        }
+        .sheet(item: $selectedSlotForAction) { slot in
+            if let machine = selectedMachine {
+                SlotDetailSheet(
+                    machineName: machine.locationName,
+                    slot: slot,
+                    onRestockFull: {
+                        restockSingleSlot(machineId: machine.id, slotId: slot.id)
+                    },
+                    onUpdateStock: { updatedCount in
+                        updateSingleSlotStock(machineId: machine.id, slotId: slot.id, newStock: updatedCount)
+                    }
+                )
+            }
+        }
+        .sheet(isPresented: $showSalesHistory) {
+            SalesHistorySheet(
+                logs: salesLogs,
+                totalSales: totalSalesAmount,
+                totalProfit: totalProfitAmount,
+                totalCashInBoxes: totalCashInBoxes,
+                onClearLogs: {
+                    salesLogs = []
+                    saveState()
+                }
+            )
         }
         .sheet(isPresented: $showDeviceInfo) {
             DeviceEnvInfoView(appName: appDisplayName)
-        }
-        .sheet(item: $previewFile) { file in
-            NavigationView {
-                Group {
-                    if let img = previewImage {
-                        ScrollView([.horizontal, .vertical]) {
-                            Image(uiImage: img)
-                                .resizable()
-                                .scaledToFit()
-                                .padding()
-                        }
-                    } else {
-                        ScrollView {
-                            Text(previewText)
-                                .font(.system(.body, design: .monospaced))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding()
-                        }
-                    }
-                }
-                .navigationTitle(file.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar {
-                    ToolbarItem(placement: .navigationBarLeading) {
-                        Button {
-                            shareItems = [file.url]
-                            showShare = true
-                        } label: { Image(systemName: "square.and.arrow.up") }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("閉じる") { previewFile = nil; previewImage = nil }
-                    }
-                }
-            }
-        }
-        .sheet(item: $audioFile, onDismiss: { audioFile = nil }) { file in
-            AudioPlayerSheet(file: file) {
-                shareItems = [file.url]
-                showShare = true
-            }
         }
         .sheet(isPresented: $showShare) {
             ShareView(items: shareItems)
@@ -208,165 +428,193 @@ struct ContentView: View {
         }
     }
 
-    private func extract(_ sourceURL: URL) {
-        let ok = sourceURL.startAccessingSecurityScopedResource()
-        defer { if ok { sourceURL.stopAccessingSecurityScopedResource() } }
+    // MARK: - 業務ロジック
 
-        do {
-            let fm = FileManager.default
-            if fm.fileExists(atPath: inboxCopyDir.path) {
-                try fm.removeItem(at: inboxCopyDir)
-            }
-            try fm.createDirectory(at: inboxCopyDir, withIntermediateDirectories: true)
+    private func statusColor(_ status: MachineStatus) -> Color {
+        switch status {
+        case .normal: return .green
+        case .needsRestock: return .orange
+        case .outOfService: return .red
+        }
+    }
 
-            let fileName = sourceURL.lastPathComponent.isEmpty ? "Payload" : sourceURL.lastPathComponent
-            let copiedURL = inboxCopyDir.appendingPathComponent(fileName)
-            if fm.fileExists(atPath: copiedURL.path) {
-                try fm.removeItem(at: copiedURL)
-            }
+    private func simulatePurchase(machineId: String, slotId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }),
+              let sIdx = machines[mIdx].slots.firstIndex(where: { $0.id == slotId }) else { return }
 
-            if coordinatedCopy(from: sourceURL, to: copiedURL, fm: fm) == nil {
-                try fm.copyItem(at: sourceURL, to: copiedURL)
-            }
-
-            if fm.fileExists(atPath: rootDir.path) { try fm.removeItem(at: rootDir) }
-            try fm.createDirectory(at: rootDir, withIntermediateDirectories: true)
-
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: copiedURL.path, isDirectory: &isDir), isDir.boolValue {
-                let count = try copyDirectoryContents(from: copiedURL, to: rootDir, fm: fm)
-                zipName = fileName
-                reload()
-                message = "「\(zipName)」から \(count) 個のファイルを取り出しました。"
-                showMessage = true
-                return
-            }
-
-            let data = try Data(contentsOf: copiedURL)
-            let count = try ZipUnpacker.unpack(data: data, to: rootDir)
-            zipName = fileName
-            reload()
-            message = "「\(zipName)」から \(count) 個のファイルを取り出しました。"
+        guard !machines[mIdx].isOutOfService else {
+            message = "現在この自販機は停止中です。"
             showMessage = true
-        } catch {
-            message = "解凍失敗: \(error.localizedDescription)"
+            return
+        }
+
+        var slot = machines[mIdx].slots[sIdx]
+        guard slot.currentStock > 0 else {
+            message = "「\(slot.name)」は売り切れです。"
             showMessage = true
-        }
-    }
-
-    private func copyDirectoryContents(from srcDir: URL, to dstDir: URL, fm: FileManager) throws -> Int {
-        guard let enumerator = fm.enumerator(
-            at: srcDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return 0
-        }
-        var count = 0
-        let basePath = srcDir.standardizedFileURL.path
-        for case let itemURL as URL in enumerator {
-            if itemURL.path.contains("__MACOSX") { continue }
-            let values = try? itemURL.resourceValues(forKeys: [.isDirectoryKey])
-            if values?.isDirectory == true { continue }
-            let relPath = itemURL.standardizedFileURL.path.replacingOccurrences(of: basePath + "/", with: "")
-            let targetURL = dstDir.appendingPathComponent(relPath)
-            try fm.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            if fm.fileExists(atPath: targetURL.path) {
-                try fm.removeItem(at: targetURL)
-            }
-            try fm.copyItem(at: itemURL, to: targetURL)
-            count += 1
-        }
-        if count == 0 {
-            throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "取り出せるファイルがありません"])
-        }
-        return count
-    }
-
-    private func coordinatedCopy(from src: URL, to dst: URL, fm: FileManager) -> Bool? {
-        var error: NSError?
-        var ok = false
-        NSFileCoordinator().coordinate(readingItemAt: src, options: [], error: &error) { url in
-            if (try? fm.copyItem(at: url, to: dst)) != nil {
-                ok = true
-            }
-        }
-        return error == nil && ok ? true : nil
-    }
-
-    private func reload() {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(at: rootDir, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsHiddenFiles]) else {
-            files = []; return
-        }
-        var list: [ExtractedFile] = []
-        let base = rootDir.standardizedFileURL.path
-        for case let u as URL in enumerator {
-            let v = try? u.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if v?.isDirectory == true || u.path.contains("__MACOSX") { continue }
-            let rel = u.standardizedFileURL.path.replacingOccurrences(of: base + "/", with: "")
-            list.append(ExtractedFile(id: u.path, url: u, name: u.lastPathComponent, path: rel, size: Int64(v?.fileSize ?? 0)))
-        }
-        files = list.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-    }
-
-    private func isAudio(_ url: URL) -> Bool {
-        ["mp3", "wav", "m4a", "aac", "caf", "aiff"].contains(url.pathExtension.lowercased())
-    }
-
-    private func isText(_ url: URL) -> Bool {
-        ["txt", "json", "xml", "html", "htm", "css", "js", "ts", "swift", "py", "md", "csv", "log", "yml", "yaml"].contains(url.pathExtension.lowercased())
-    }
-
-    private func open(_ file: ExtractedFile) {
-        if isAudio(file.url) {
-            audioFile = file
             return
         }
-        if let data = try? Data(contentsOf: file.url), let img = UIImage(data: data) {
-            previewImage = img
-            previewText = ""
-            previewFile = file
-            return
-        }
-        if isText(file.url),
-           let data = try? Data(contentsOf: file.url),
-           let str = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .shiftJIS) {
-            previewImage = nil
-            previewText = str
-            previewFile = file
-            return
-        }
-        message = "現在その拡張子やファイルはZIP BOXには対応していません。"
+
+        slot.currentStock -= 1
+        machines[mIdx].slots[sIdx] = slot
+        machines[mIdx].cashBox += slot.price
+
+        let log = SaleLog(
+            id: UUID().uuidString,
+            date: Date(),
+            machineId: machines[mIdx].code,
+            machineName: machines[mIdx].locationName,
+            productName: slot.name,
+            price: slot.price,
+            profit: slot.profitPerUnit
+        )
+        salesLogs.insert(log, at: 0)
+        saveState()
+    }
+
+    private func restockSingleSlot(machineId: String, slotId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }),
+              let sIdx = machines[mIdx].slots.firstIndex(where: { $0.id == slotId }) else { return }
+        let added = machines[mIdx].slots[sIdx].maxCapacity - machines[mIdx].slots[sIdx].currentStock
+        machines[mIdx].slots[sIdx].currentStock = machines[mIdx].slots[sIdx].maxCapacity
+        saveState()
+        message = "「\(machines[mIdx].slots[sIdx].name)」を \(added)本 補充し、満タンにしました。"
         showMessage = true
     }
 
-    private func icon(for url: URL) -> String {
-        switch url.pathExtension.lowercased() {
-        case "png", "jpg", "jpeg", "gif", "webp", "heic": return "photo.fill"
-        case "mp3", "wav", "m4a", "aac", "caf", "aiff": return "waveform"
-        case "mp4", "mov": return "film.fill"
-        case "pdf": return "doc.richtext.fill"
-        case "zip", "ipa": return "doc.zipper"
-        default: return "doc.text.fill"
+    private func updateSingleSlotStock(machineId: String, slotId: String, newStock: Int) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }),
+              let sIdx = machines[mIdx].slots.firstIndex(where: { $0.id == slotId }) else { return }
+        let maxCap = machines[mIdx].slots[sIdx].maxCapacity
+        machines[mIdx].slots[sIdx].currentStock = min(max(0, newStock), maxCap)
+        saveState()
+    }
+
+    private func restockAllSlots(in machineId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }) else { return }
+        var totalAdded = 0
+        for sIdx in machines[mIdx].slots.indices {
+            let diff = machines[mIdx].slots[sIdx].maxCapacity - machines[mIdx].slots[sIdx].currentStock
+            if diff > 0 {
+                totalAdded += diff
+                machines[mIdx].slots[sIdx].currentStock = machines[mIdx].slots[sIdx].maxCapacity
+            }
+        }
+        saveState()
+        message = "\(machines[mIdx].locationName) の全レーンへ合計 \(totalAdded)本 補充しました。"
+        showMessage = true
+    }
+
+    private func collectCash(from machineId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }) else { return }
+        let collected = machines[mIdx].cashBox
+        machines[mIdx].cashBox = 0
+        saveState()
+        message = "\(machines[mIdx].locationName) から売上金 ¥\(collected) を回収しました。"
+        showMessage = true
+    }
+
+    private func toggleOutOfService(for machineId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }) else { return }
+        machines[mIdx].isOutOfService.toggle()
+        saveState()
+    }
+
+    private func deleteSlots(at offsets: IndexSet, in machineId: String) {
+        guard let mIdx = machines.firstIndex(where: { $0.id == machineId }) else { return }
+        machines[mIdx].slots.remove(atOffsets: offsets)
+        saveState()
+    }
+
+    private func deleteMachine(id: String) {
+        machines.removeAll { $0.id == id }
+        if selectedMachineId == id {
+            selectedMachineId = machines.first?.id
+        }
+        saveState()
+    }
+
+    private func exportCSV() {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        var csv = "日時,自販機コード,設置場所,商品名,販売価格,粗利\n"
+        for log in salesLogs {
+            let dateStr = formatter.string(from: log.date)
+            csv += "\"\(dateStr)\",\"\(log.machineId)\",\"\(log.machineName)\",\"\(log.productName)\",\(log.price),\(log.profit)\n"
+        }
+
+        let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("自販機売上レポート.csv")
+        if let data = csv.data(using: .utf8) {
+            try? data.write(to: tempURL, options: .atomic)
+            shareItems = [tempURL]
+            showShare = true
         }
     }
 
-    private func iconColor(for url: URL) -> Color {
-        switch url.pathExtension.lowercased() {
-        case "png", "jpg", "jpeg", "gif", "webp", "heic": return .pink
-        case "mp3", "wav", "m4a", "aac", "caf", "aiff": return .purple
-        case "zip", "ipa": return .orange
-        default: return .blue
+    // MARK: - 永続化・サンプルデータ
+
+    private struct SavedAppState: Codable {
+        let machines: [VendingMachineItem]
+        let salesLogs: [SaleLog]
+    }
+
+    private func saveState() {
+        let state = SavedAppState(machines: machines, salesLogs: salesLogs)
+        if let data = try? JSONEncoder().encode(state) {
+            try? data.write(to: saveFileURL, options: .atomic)
         }
     }
 
-    private func formatSize(_ bytes: Int64) -> String {
-        ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+    private func loadState() {
+        if let data = try? Data(contentsOf: saveFileURL),
+           let state = try? JSONDecoder().decode(SavedAppState.self, from: data) {
+            machines = state.machines
+            salesLogs = state.salesLogs
+            if selectedMachineId == nil {
+                selectedMachineId = machines.first?.id
+            }
+        }
+    }
+
+    private func loadSampleData() {
+        let m1 = VendingMachineItem(
+            id: UUID().uuidString,
+            code: "VM-001",
+            locationName: "半田駅前ビル 1F",
+            isOutOfService: false,
+            cashBox: 1480,
+            slots: [
+                DrinkSlot(id: UUID().uuidString, name: "緑茶 500ml", price: 160, cost: 65, currentStock: 3, maxCapacity: 20, reorderThreshold: 4),
+                DrinkSlot(id: UUID().uuidString, name: "ブラック缶コーヒー", price: 130, cost: 45, currentStock: 12, maxCapacity: 15, reorderThreshold: 3),
+                DrinkSlot(id: UUID().uuidString, name: "天然水 500ml", price: 120, cost: 35, currentStock: 0, maxCapacity: 24, reorderThreshold: 5),
+                DrinkSlot(id: UUID().uuidString, name: "エナジードリンク 250ml", price: 210, cost: 95, currentStock: 8, maxCapacity: 12, reorderThreshold: 3)
+            ]
+        )
+        let m2 = VendingMachineItem(
+            id: UUID().uuidString,
+            code: "VM-002",
+            locationName: "工場棟 休憩スペース",
+            isOutOfService: false,
+            cashBox: 890,
+            slots: [
+                DrinkSlot(id: UUID().uuidString, name: "スポーツドリンク 500ml", price: 160, cost: 60, currentStock: 14, maxCapacity: 20, reorderThreshold: 4),
+                DrinkSlot(id: UUID().uuidString, name: "微糖缶コーヒー", price: 130, cost: 45, currentStock: 2, maxCapacity: 15, reorderThreshold: 3)
+            ]
+        )
+        machines = [m1, m2]
+        selectedMachineId = m1.id
+        salesLogs = [
+            SaleLog(id: UUID().uuidString, date: Date().addingTimeInterval(-3600), machineId: "VM-001", machineName: "半田駅前ビル 1F", productName: "緑茶 500ml", price: 160, profit: 95),
+            SaleLog(id: UUID().uuidString, date: Date().addingTimeInterval(-7200), machineId: "VM-002", machineName: "工場棟 休憩スペース", productName: "スポーツドリンク 500ml", price: 160, profit: 100)
+        ]
+        saveState()
     }
 }
 
-struct ZipFileBadgeView: View {
+// MARK: - サブビュー・シート群
+
+struct VendingBadgeView: View {
     let size: CGFloat
 
     var body: some View {
@@ -375,14 +623,243 @@ struct ZipFileBadgeView: View {
                 .fill(Color(.systemBackground))
                 .overlay(
                     RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
-                        .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+                        .stroke(Color.blue.opacity(0.3), lineWidth: 1)
                 )
-            Image(systemName: "doc.zipper")
-                .font(.system(size: size * 0.52, weight: .medium))
-                .foregroundColor(.gray)
+            Image(systemName: "building.2.crop.circle.fill")
+                .font(.system(size: size * 0.54, weight: .medium))
+                .foregroundColor(.blue)
         }
         .frame(width: size, height: size)
         .shadow(color: Color.black.opacity(0.08), radius: size * 0.06, x: 0, y: size * 0.03)
+    }
+}
+
+struct AddMachineSheet: View {
+    let onAdd: (String, String) -> Void
+    @Environment(\.presentationMode) private var presentationMode
+
+    @State private var code = "VM-003"
+    @State private var locationName = ""
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("自販機の基本情報")) {
+                    TextField("管理コード (例: VM-003)", text: $code)
+                    TextField("設置場所 (例: 本社ロビー横)", text: $locationName)
+                }
+            }
+            .navigationTitle("自販機を登録")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("登録") {
+                        let trimmedCode = code.trimmingCharacters(in: .whitespaces)
+                        let trimmedLoc = locationName.trimmingCharacters(in: .whitespaces)
+                        guard !trimmedCode.isEmpty, !trimmedLoc.isEmpty else { return }
+                        onAdd(trimmedCode, trimmedLoc)
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                    .disabled(code.trimmingCharacters(in: .whitespaces).isEmpty || locationName.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+struct AddSlotSheet: View {
+    let machineName: String
+    let onAdd: (DrinkSlot) -> Void
+    @Environment(\.presentationMode) private var presentationMode
+
+    @State private var name = ""
+    @State private var priceText = "150"
+    @State private var costText = "60"
+    @State private var maxCap = 20
+    @State private var initialStock = 15
+    @State private var threshold = 4
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("対象: \(machineName)")) {
+                    TextField("商品名 (例: ウーロン茶 500ml)", text: $name)
+                    HStack {
+                        Text("販売価格 (円)")
+                        Spacer()
+                        TextField("150", text: $priceText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                    HStack {
+                        Text("仕入原価 (円)")
+                        Spacer()
+                        TextField("60", text: $costText)
+                            .keyboardType(.numberPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+                }
+                Section(header: Text("在庫・補充設定")) {
+                    Stepper("最大収納数: \(maxCap)本", value: $maxCap, in: 1...50)
+                    Stepper("初期在庫数: \(min(initialStock, maxCap))本", value: $initialStock, in: 0...maxCap)
+                    Stepper("補充アラート基準: \(threshold)本以下", value: $threshold, in: 0...maxCap)
+                }
+            }
+            .navigationTitle("商品レーンを追加")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("キャンセル") { presentationMode.wrappedValue.dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("追加") {
+                        let cleanName = name.trimmingCharacters(in: .whitespaces)
+                        let price = Int(priceText) ?? 150
+                        let cost = Int(costText) ?? 60
+                        guard !cleanName.isEmpty else { return }
+                        let slot = DrinkSlot(
+                            id: UUID().uuidString,
+                            name: cleanName,
+                            price: max(0, price),
+                            cost: max(0, cost),
+                            currentStock: min(initialStock, maxCap),
+                            maxCapacity: maxCap,
+                            reorderThreshold: threshold
+                        )
+                        onAdd(slot)
+                        presentationMode.wrappedValue.dismiss()
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+    }
+}
+
+struct SlotDetailSheet: View {
+    let machineName: String
+    let slot: DrinkSlot
+    let onRestockFull: () -> Void
+    let onUpdateStock: (Int) -> Void
+
+    @Environment(\.presentationMode) private var presentationMode
+    @State private var draftStock: Int = 0
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section(header: Text("\(machineName) • 商品詳細")) {
+                    LabeledContentRow(label: "商品名", value: slot.name)
+                    LabeledContentRow(label: "販売価格 / 原価", value: "¥\(slot.price) / ¥\(slot.cost)")
+                    LabeledContentRow(label: "1本あたり粗利", value: "¥\(slot.profitPerUnit)")
+                    LabeledContentRow(label: "補充アラート基準", value: "\(slot.reorderThreshold)本以下")
+                }
+
+                Section(header: Text("在庫数の調整")) {
+                    Stepper("現在在庫: \(draftStock) / \(slot.maxCapacity)本", value: $draftStock, in: 0...slot.maxCapacity)
+
+                    Button {
+                        onUpdateStock(draftStock)
+                        presentationMode.wrappedValue.dismiss()
+                    } label: {
+                        Text("この在庫数で保存")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+
+                Section {
+                    Button {
+                        onRestockFull()
+                        presentationMode.wrappedValue.dismiss()
+                    } label: {
+                        Label("最大容量（\(slot.maxCapacity)本）まで満タン補充", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity, alignment: .center)
+                    }
+                }
+            }
+            .navigationTitle("在庫補充・編集")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { presentationMode.wrappedValue.dismiss() }
+                }
+            }
+            .onAppear {
+                draftStock = slot.currentStock
+            }
+        }
+    }
+}
+
+struct SalesHistorySheet: View {
+    let logs: [SaleLog]
+    let totalSales: Int
+    let totalProfit: Int
+    let totalCashInBoxes: Int
+    let onClearLogs: () -> Void
+
+    @Environment(\.presentationMode) private var presentationMode
+
+    private var dateFormatter: DateFormatter {
+        let f = DateFormatter()
+        f.dateFormat = "MM/dd HH:mm"
+        return f
+    }
+
+    var body: some View {
+        NavigationView {
+            List {
+                Section(header: Text("全体集計サマリー")) {
+                    LabeledContentRow(label: "累計売上高", value: "¥\(totalSales)")
+                    LabeledContentRow(label: "累計粗利益", value: "¥\(totalProfit)")
+                    LabeledContentRow(label: "全自販機の未回収金庫合計", value: "¥\(totalCashInBoxes)")
+                }
+
+                Section(header: Text("販売履歴 (\(logs.count)件)")) {
+                    if logs.isEmpty {
+                        Text("販売履歴はまだありません")
+                            .foregroundColor(.secondary)
+                    } else {
+                        ForEach(logs) { log in
+                            HStack {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(log.productName)
+                                        .font(.subheadline.weight(.medium))
+                                    Text("\(dateFormatter.string(from: log.date)) • \(log.machineId) \(log.machineName)")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                VStack(alignment: .trailing, spacing: 2) {
+                                    Text("¥\(log.price)")
+                                        .font(.subheadline.bold())
+                                    Text("粗利 +¥\(log.profit)")
+                                        .font(.caption2)
+                                        .foregroundColor(.green)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("売上・収益レポート")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if !logs.isEmpty {
+                        Button("履歴リセット", role: .destructive) {
+                            onClearLogs()
+                        }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("閉じる") { presentationMode.wrappedValue.dismiss() }
+                }
+            }
+        }
     }
 }
 
@@ -439,351 +916,10 @@ private struct LabeledContentRow: View {
     }
 }
 
-struct AudioPlayerSheet: View {
-    let file: ExtractedFile
-    let onShare: () -> Void
-
-    @Environment(\.presentationMode) private var presentationMode
-    @State private var player: AVAudioPlayer?
-    @State private var isPlaying = false
-    @State private var currentTime: TimeInterval = 0
-    @State private var duration: TimeInterval = 1
-    @State private var errorText: String?
-    private let timer = Timer.publish(every: 0.2, on: .main, in: .common).autoconnect()
-
-    var body: some View {
-        NavigationView {
-            VStack(spacing: 24) {
-                Image(systemName: "waveform.circle.fill")
-                    .font(.system(size: 72))
-                    .foregroundColor(.purple)
-
-                Text(file.name)
-                    .font(.headline)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
-
-                if let err = errorText {
-                    Text(err)
-                        .font(.caption)
-                        .foregroundColor(.red)
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal)
-                } else {
-                    VStack(spacing: 6) {
-                        Slider(
-                            value: Binding(
-                                get: { currentTime },
-                                set: { newVal in
-                                    currentTime = newVal
-                                    player?.currentTime = newVal
-                                }
-                            ),
-                            in: 0...max(duration, 0.1)
-                        )
-                        HStack {
-                            Text(timeText(currentTime))
-                            Spacer()
-                            Text(timeText(duration))
-                        }
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.secondary)
-                    }
-                    .padding(.horizontal)
-                }
-
-                Button {
-                    togglePlay()
-                } label: {
-                    Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                        .font(.system(size: 64))
-                        .foregroundColor(.purple)
-                }
-                .disabled(errorText != nil)
-            }
-            .padding()
-            .navigationTitle("音声再生")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button(action: onShare) {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("閉じる") {
-                        player?.stop()
-                        presentationMode.wrappedValue.dismiss()
-                    }
-                }
-            }
-        }
-        .onAppear(perform: setupPlayer)
-        .onDisappear { player?.stop() }
-        .onReceive(timer) { _ in
-            guard let p = player else { return }
-            currentTime = p.currentTime
-            isPlaying = p.isPlaying
-        }
-    }
-
-    private func setupPlayer() {
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-            let p = try AVAudioPlayer(contentsOf: file.url)
-            p.prepareToPlay()
-            duration = max(p.duration, 0.1)
-            player = p
-            p.play()
-            isPlaying = true
-        } catch {
-            errorText = "この音声ファイルを再生できませんでした: \(error.localizedDescription)"
-        }
-    }
-
-    private func togglePlay() {
-        guard let p = player else { return }
-        if p.isPlaying {
-            p.pause()
-            isPlaying = false
-        } else {
-            p.play()
-            isPlaying = true
-        }
-    }
-
-    private func timeText(_ sec: TimeInterval) -> String {
-        let total = Int(max(0, sec))
-        return String(format: "%d:%02d", total / 60, total % 60)
-    }
-}
-
-struct ZipDocumentPicker: UIViewControllerRepresentable {
-    let onPick: (URL) -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick)
-    }
-
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        var types: [UTType] = [
-            .zip,
-            UTType(filenameExtension: "zip") ?? .data,
-            UTType(filenameExtension: "ipa") ?? .data,
-            .archive,
-            .data,
-            .item
-        ]
-        if #available(iOS 15.0, *) {
-            types.append(.folder)
-        }
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
-    }
-
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (URL) -> Void
-        init(onPick: @escaping (URL) -> Void) { self.onPick = onPick }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            if let first = urls.first {
-                onPick(first)
-            }
-        }
-    }
-}
-
 struct ShareView: UIViewControllerRepresentable {
     let items: [Any]
     func makeUIViewController(context: Context) -> UIActivityViewController {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-enum ZipUnpacker {
-    static func unpack(data: Data, to dir: URL) throws -> Int {
-        let fm = FileManager.default
-        var count = 0
-
-        if let entries = readCentralDirectory(data), !entries.isEmpty {
-            for e in entries where !e.name.hasSuffix("/") && !e.name.contains("__MACOSX") {
-                let off = Int(e.localOffset)
-                guard off + 30 <= data.count, data.u32(off) == 0x04034b50 else { continue }
-                let start = off + 30 + Int(data.u16(off + 26)) + Int(data.u16(off + 28))
-                let end = start + Int(e.compSize)
-                guard start >= 0, end <= data.count, start <= end else { continue }
-                let raw = try decode(Data(data.subdata(in: start..<end)), method: e.method, uncompSize: Int(e.uncompSize))
-                let clean = sanitizePath(e.name)
-                guard !clean.isEmpty else { continue }
-                let out = dir.appendingPathComponent(clean)
-                try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try raw.write(to: out, options: .atomic)
-                count += 1
-            }
-            if count > 0 { return count }
-        }
-
-        var off = 0
-        while off + 30 <= data.count, data.u32(off) == 0x04034b50 {
-            let method = data.u16(off + 8)
-            let comp = Int(data.u32(off + 18))
-            let uncomp = Int(data.u32(off + 22))
-            let nLen = Int(data.u16(off + 26))
-            let eLen = Int(data.u16(off + 28))
-            let nStart = off + 30
-            let pStart = nStart + nLen + eLen
-            let pEnd = pStart + comp
-            guard pEnd <= data.count, pStart <= pEnd else { break }
-            let nameData = Data(data.subdata(in: nStart..<(nStart + nLen)))
-            let name = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .shiftJIS) ?? "file_\(count)"
-            if !name.hasSuffix("/") && !name.contains("__MACOSX") {
-                let raw = try decode(Data(data.subdata(in: pStart..<pEnd)), method: method, uncompSize: uncomp)
-                let clean = sanitizePath(name)
-                if !clean.isEmpty {
-                    let out = dir.appendingPathComponent(clean)
-                    try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    try raw.write(to: out, options: .atomic)
-                    count += 1
-                }
-            }
-            off = pEnd
-        }
-        guard count > 0 else {
-            throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "解凍できるファイルがありません"])
-        }
-        return count
-    }
-
-    private static func sanitizePath(_ rawPath: String) -> String {
-        rawPath
-            .replacingOccurrences(of: "\\", with: "/")
-            .split(separator: "/")
-            .filter { $0 != "." && $0 != ".." && !$0.isEmpty }
-            .joined(separator: "/")
-    }
-
-    private struct Entry {
-        let method: UInt16
-        let compSize: UInt32
-        let uncompSize: UInt32
-        let localOffset: UInt32
-        let name: String
-    }
-
-    private static func readCentralDirectory(_ data: Data) -> [Entry]? {
-        guard data.count >= 22 else { return nil }
-        let searchStart = max(0, data.count - 65557)
-        let searchEnd = data.count - 22
-        guard searchStart <= searchEnd,
-              let eocd = (searchStart...searchEnd).reversed().first(where: { data.u32($0) == 0x06054b50 }) else {
-            return nil
-        }
-        let total = Int(data.u16(eocd + 10))
-        var cur = Int(data.u32(eocd + 16))
-        var res: [Entry] = []
-        for _ in 0..<total {
-            guard cur + 46 <= data.count, data.u32(cur) == 0x02014b50 else { break }
-            let nLen = Int(data.u16(cur + 28))
-            let eLen = Int(data.u16(cur + 30))
-            let cLen = Int(data.u16(cur + 32))
-            guard cur + 46 + nLen <= data.count else { break }
-            let nameData = Data(data.subdata(in: (cur + 46)..<(cur + 46 + nLen)))
-            let name = String(data: nameData, encoding: .utf8) ?? String(data: nameData, encoding: .shiftJIS) ?? "item"
-            res.append(Entry(
-                method: data.u16(cur + 10),
-                compSize: data.u32(cur + 20),
-                uncompSize: data.u32(cur + 24),
-                localOffset: data.u32(cur + 42),
-                name: name
-            ))
-            cur += 46 + nLen + eLen + cLen
-        }
-        return res
-    }
-
-    private static func decode(_ src: Data, method: UInt16, uncompSize: Int) throws -> Data {
-        if method == 0 { return src }
-        if method == 8 {
-            if src.isEmpty { return Data() }
-            if let streamDecoded = decompressStream(src: src, initialHint: uncompSize) {
-                return streamDecoded
-            }
-            var wrapped = Data([0x78, 0x9C])
-            wrapped.append(src)
-            wrapped.append(contentsOf: [0x00, 0x00, 0x00, 0x00])
-            if let wrappedDecoded = decompressStream(src: wrapped, initialHint: uncompSize) {
-                return wrappedDecoded
-            }
-            throw NSError(domain: "ZIP解凍箱", code: 2, userInfo: [NSLocalizedDescriptionKey: "解凍エラー"])
-        }
-        throw NSError(domain: "ZIP解凍箱", code: 3, userInfo: [NSLocalizedDescriptionKey: "未対応形式(\(method))"])
-    }
-
-    private static func decompressStream(src: Data, initialHint: Int) -> Data? {
-        var stream = compression_stream(
-            dst_ptr: UnsafeMutablePointer<UInt8>.allocate(capacity: 1),
-            dst_size: 0,
-            src_ptr: UnsafePointer<UInt8>(bitPattern: 1)!,
-            src_size: 0,
-            state: nil
-        )
-        stream.dst_ptr.deallocate()
-
-        let status = compression_stream_init(&stream, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
-        guard status == COMPRESSION_STATUS_OK else { return nil }
-        defer { compression_stream_destroy(&stream) }
-
-        let chunkSize = max(initialHint > 0 ? min(initialHint, 1024 * 1024) : 65536, 16384)
-        let dstBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
-        defer { dstBuffer.deallocate() }
-
-        var output = Data(capacity: max(initialHint, 1024))
-
-        return src.withUnsafeBytes { rawBuf -> Data? in
-            guard let base = rawBuf.bindMemory(to: UInt8.self).baseAddress else { return nil }
-            stream.src_ptr = base
-            stream.src_size = src.count
-
-            while true {
-                stream.dst_ptr = dstBuffer
-                stream.dst_size = chunkSize
-                let flags: Int32 = (stream.src_size == 0) ? Int32(COMPRESSION_STREAM_FINALIZE.rawValue) : 0
-                let res = compression_stream_process(&stream, flags)
-                let produced = chunkSize - stream.dst_size
-                if produced > 0 {
-                    output.append(dstBuffer, count: produced)
-                }
-
-                switch res {
-                case COMPRESSION_STATUS_END:
-                    return output
-                case COMPRESSION_STATUS_OK:
-                    continue
-                default:
-                    return nil
-                }
-            }
-        }
-    }
-}
-
-private extension Data {
-    func u16(_ o: Int) -> UInt16 {
-        let i = startIndex + o
-        return UInt16(self[i]) | (UInt16(self[i + 1]) << 8)
-    }
-
-    func u32(_ o: Int) -> UInt32 {
-        let i = startIndex + o
-        return UInt32(self[i])
-            | (UInt32(self[i + 1]) << 8)
-            | (UInt32(self[i + 2]) << 16)
-            | (UInt32(self[i + 3]) << 24)
-    }
 }
