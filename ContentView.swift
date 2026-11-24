@@ -53,7 +53,7 @@ struct ContentView: View {
                     ZipFileBadgeView(size: 46)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(appDisplayName).font(.headline)
-                        Text("ZIP: \(zipName)").font(.caption).foregroundColor(.secondary).lineLimit(1)
+                        Text("対象: \(zipName)").font(.caption).foregroundColor(.secondary).lineLimit(1)
                     }
                     Spacer()
                     if !files.isEmpty {
@@ -72,7 +72,7 @@ struct ContentView: View {
                     VStack(spacing: 16) {
                         ZipFileBadgeView(size: 84)
                         Text(appDisplayName).font(.title2.bold())
-                        Text("ZIPの中身を全部バラバラに展開します\n「ファイル」アプリから選ぶか、共有から送ってください")
+                        Text("ZIPやPayloadの中身を全部バラバラに展開します\n「ファイル」アプリから選ぶか、共有から送ってください")
                             .font(.caption)
                             .foregroundColor(.secondary)
                             .multilineTextAlignment(.center)
@@ -81,7 +81,7 @@ struct ContentView: View {
                         Button {
                             showPicker = true
                         } label: {
-                            Label("ZIPファイルを選ぶ", systemImage: "folder.badge.plus")
+                            Label("ZIP / Payloadを選ぶ", systemImage: "folder.badge.plus")
                                 .font(.headline)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 4)
@@ -219,7 +219,7 @@ struct ContentView: View {
             }
             try fm.createDirectory(at: inboxCopyDir, withIntermediateDirectories: true)
 
-            let fileName = sourceURL.lastPathComponent.isEmpty ? "archive.zip" : sourceURL.lastPathComponent
+            let fileName = sourceURL.lastPathComponent.isEmpty ? "Payload" : sourceURL.lastPathComponent
             let copiedURL = inboxCopyDir.appendingPathComponent(fileName)
             if fm.fileExists(atPath: copiedURL.path) {
                 try fm.removeItem(at: copiedURL)
@@ -229,10 +229,20 @@ struct ContentView: View {
                 try fm.copyItem(at: sourceURL, to: copiedURL)
             }
 
-            let data = try Data(contentsOf: copiedURL)
             if fm.fileExists(atPath: rootDir.path) { try fm.removeItem(at: rootDir) }
             try fm.createDirectory(at: rootDir, withIntermediateDirectories: true)
 
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: copiedURL.path, isDirectory: &isDir), isDir.boolValue {
+                let count = try copyDirectoryContents(from: copiedURL, to: rootDir, fm: fm)
+                zipName = fileName
+                reload()
+                message = "「\(zipName)」から \(count) 個のファイルを取り出しました。"
+                showMessage = true
+                return
+            }
+
+            let data = try Data(contentsOf: copiedURL)
             let count = try ZipUnpacker.unpack(data: data, to: rootDir)
             zipName = fileName
             reload()
@@ -242,6 +252,35 @@ struct ContentView: View {
             message = "解凍失敗: \(error.localizedDescription)"
             showMessage = true
         }
+    }
+
+    private func copyDirectoryContents(from srcDir: URL, to dstDir: URL, fm: FileManager) throws -> Int {
+        guard let enumerator = fm.enumerator(
+            at: srcDir,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return 0
+        }
+        var count = 0
+        let basePath = srcDir.standardizedFileURL.path
+        for case let itemURL as URL in enumerator {
+            if itemURL.path.contains("__MACOSX") { continue }
+            let values = try? itemURL.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true { continue }
+            let relPath = itemURL.standardizedFileURL.path.replacingOccurrences(of: basePath + "/", with: "")
+            let targetURL = dstDir.appendingPathComponent(relPath)
+            try fm.createDirectory(at: targetURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: targetURL.path) {
+                try fm.removeItem(at: targetURL)
+            }
+            try fm.copyItem(at: itemURL, to: targetURL)
+            count += 1
+        }
+        if count == 0 {
+            throw NSError(domain: "ZIP解凍箱", code: 1, userInfo: [NSLocalizedDescriptionKey: "取り出せるファイルがありません"])
+        }
+        return count
     }
 
     private func coordinatedCopy(from src: URL, to dst: URL, fm: FileManager) -> Bool? {
@@ -308,7 +347,7 @@ struct ContentView: View {
         case "mp3", "wav", "m4a", "aac", "caf", "aiff": return "waveform"
         case "mp4", "mov": return "film.fill"
         case "pdf": return "doc.richtext.fill"
-        case "zip": return "doc.zipper"
+        case "zip", "ipa": return "doc.zipper"
         default: return "doc.text.fill"
         }
     }
@@ -317,7 +356,7 @@ struct ContentView: View {
         switch url.pathExtension.lowercased() {
         case "png", "jpg", "jpeg", "gif", "webp", "heic": return .pink
         case "mp3", "wav", "m4a", "aac", "caf", "aiff": return .purple
-        case "zip": return .orange
+        case "zip", "ipa": return .orange
         default: return .blue
         }
     }
@@ -528,13 +567,17 @@ struct ZipDocumentPicker: UIViewControllerRepresentable {
     }
 
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let types: [UTType] = [
+        var types: [UTType] = [
             .zip,
             UTType(filenameExtension: "zip") ?? .data,
+            UTType(filenameExtension: "ipa") ?? .data,
             .archive,
             .data,
             .item
         ]
+        if #available(iOS 15.0, *) {
+            types.append(.folder)
+        }
         let picker = UIDocumentPickerViewController(forOpeningContentTypes: types, asCopy: true)
         picker.allowsMultipleSelection = false
         picker.delegate = context.coordinator
