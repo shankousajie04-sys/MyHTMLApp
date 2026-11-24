@@ -923,4 +923,3 @@ struct ShareView: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
-
