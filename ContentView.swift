@@ -1,17 +1,26 @@
 import SwiftUI
 
+// MARK: - アプリのエントリポイント
+@main
+struct SimpleSwiftApp: App {
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+        }
+    }
+}
+
 // MARK: - データモデル
-struct MemoItem: Identifiable, Codable {
-    var id = UUID()
-    var text: String
-    var date: Date
+struct MemoItem: Identifiable {
+    let id = UUID()
+    let text: String
+    let date: Date
 }
 
 // MARK: - メインビュー（タブ管理）
 struct ContentView: View {
-    // アプリ全体のテーマカラーを保存
     @AppStorage("accentColorName") private var accentColorName: String = "Blue"
-    
+
     var currentAccentColor: Color {
         switch accentColorName {
         case "Green": return .green
@@ -20,30 +29,30 @@ struct ContentView: View {
         default: return .blue
         }
     }
-    
+
     var body: some View {
         TabView {
             CounterTabView()
                 .tabItem {
                     Label("カウンター", systemImage: "plus.forwardslash.minus")
                 }
-            
+
             MemoTabView()
                 .tabItem {
                     Label("クイックメモ", systemImage: "note.text")
                 }
-            
+
             TimerTabView()
                 .tabItem {
                     Label("タイマー", systemImage: "timer")
                 }
-            
+
             SettingsTabView(accentColorName: $accentColorName)
                 .tabItem {
                     Label("設定", systemImage: "gearshape")
                 }
         }
-        .tint(currentAccentColor)
+        .accentColor(currentAccentColor)
     }
 }
 
@@ -51,16 +60,15 @@ struct ContentView: View {
 struct CounterTabView: View {
     @AppStorage("savedCount") private var count: Int = 0
     @State private var step: Int = 1
-    
+
     var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 30) {
                 Spacer()
-                
+
                 Text("\(count)")
                     .font(.system(size: 80, weight: .bold, design: .rounded))
-                    .contentTransition(.numericText())
-                
+
                 HStack(spacing: 24) {
                     Button {
                         withAnimation { count -= step }
@@ -71,7 +79,7 @@ struct CounterTabView: View {
                             .background(Color.secondary.opacity(0.15))
                             .clipShape(Circle())
                     }
-                    
+
                     Button {
                         withAnimation { count += step }
                     } label: {
@@ -79,23 +87,28 @@ struct CounterTabView: View {
                             .font(.title2.bold())
                             .frame(width: 70, height: 70)
                             .background(Color.accentColor)
-                            .foregroundStyle(.white)
+                            .foregroundColor(.white)
                             .clipShape(Circle())
                     }
                 }
-                
+
                 Stepper("増減幅: \(step)", value: $step, in: 1...100)
                     .padding(.horizontal, 40)
-                
+
                 Spacer()
             }
             .navigationTitle("カウンター")
             .toolbar {
-                Button("リセット", role: .destructive) {
-                    withAnimation { count = 0 }
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(role: .destructive) {
+                        withAnimation { count = 0 }
+                    } label: {
+                        Text("リセット")
+                    }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 
@@ -103,14 +116,14 @@ struct CounterTabView: View {
 struct MemoTabView: View {
     @State private var memos: [MemoItem] = []
     @State private var newMemoText: String = ""
-    
+
     var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack {
                 HStack {
                     TextField("新しいメモを入力...", text: $newMemoText)
                         .textFieldStyle(.roundedBorder)
-                    
+
                     Button("追加") {
                         addMemo()
                     }
@@ -118,9 +131,19 @@ struct MemoTabView: View {
                     .disabled(newMemoText.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
                 .padding()
-                
+
                 if memos.isEmpty {
-                    ContentUnavailableView("メモがありません", systemImage: "tray", description: Text("上の入力欄からメモを追加できます"))
+                    VStack(spacing: 12) {
+                        Image(systemName: "tray")
+                            .font(.system(size: 40))
+                            .foregroundColor(.secondary)
+                        Text("メモがありません")
+                            .font(.headline)
+                        Text("上の入力欄からメモを追加できます")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     List {
                         ForEach(memos) { memo in
@@ -129,7 +152,7 @@ struct MemoTabView: View {
                                     .font(.body)
                                 Text(memo.date.formatted(date: .abbreviated, time: .shortened))
                                     .font(.caption)
-                                    .foregroundStyle(.secondary)
+                                    .foregroundColor(.secondary)
                             }
                         }
                         .onDelete(perform: deleteMemo)
@@ -138,13 +161,16 @@ struct MemoTabView: View {
             }
             .navigationTitle("クイックメモ")
             .toolbar {
-                if !memos.isEmpty {
-                    EditButton()
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    if !memos.isEmpty {
+                        EditButton()
+                    }
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
-    
+
     private func addMemo() {
         let item = MemoItem(text: newMemoText, date: Date())
         withAnimation {
@@ -152,7 +178,7 @@ struct MemoTabView: View {
             newMemoText = ""
         }
     }
-    
+
     private func deleteMemo(at offsets: IndexSet) {
         memos.remove(atOffsets: offsets)
     }
@@ -163,39 +189,39 @@ struct TimerTabView: View {
     @State private var selectedSeconds: Double = 60
     @State private var remainingSeconds: Int = 60
     @State private var isRunning: Bool = false
-    
+
     let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-    
+
     var body: some View {
-        NavigationStack {
+        NavigationView {
             VStack(spacing: 30) {
                 Spacer()
-                
+
                 Text(formatTime(remainingSeconds))
                     .font(.system(size: 64, weight: .semibold, design: .monospaced))
-                
+
                 if !isRunning {
                     VStack {
                         Text("時間設定: \(Int(selectedSeconds))秒")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(.secondary)
                         Slider(value: $selectedSeconds, in: 10...600, step: 10) {
                             Text("秒数")
                         }
-                        .onChange(of: selectedSeconds) { _, newValue in
+                        .onChange(of: selectedSeconds) { newValue in
                             remainingSeconds = Int(newValue)
                         }
                         .padding(.horizontal, 40)
                     }
                 }
-                
+
                 HStack(spacing: 20) {
                     Button(isRunning ? "一時停止" : "スタート") {
                         isRunning.toggle()
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    
+
                     Button("リセット") {
                         isRunning = false
                         remainingSeconds = Int(selectedSeconds)
@@ -203,7 +229,7 @@ struct TimerTabView: View {
                     .buttonStyle(.bordered)
                     .controlSize(.large)
                 }
-                
+
                 Spacer()
             }
             .navigationTitle("タイマー")
@@ -216,8 +242,9 @@ struct TimerTabView: View {
                 }
             }
         }
+        .navigationViewStyle(.stack)
     }
-    
+
     private func formatTime(_ totalSeconds: Int) -> String {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
@@ -230,25 +257,25 @@ struct SettingsTabView: View {
     @Binding var accentColorName: String
     @State private var isNotificationsEnabled: Bool = true
     @State private var showAboutSheet: Bool = false
-    
+
     let colors = ["Blue", "Green", "Orange", "Purple"]
-    
+
     var body: some View {
-        NavigationStack {
+        NavigationView {
             Form {
-                Section("外観") {
+                Section(header: Text("外観")) {
                     Picker("テーマカラー", selection: $accentColorName) {
                         ForEach(colors, id: \.self) { color in
                             Text(color).tag(color)
                         }
                     }
                 }
-                
-                Section("一般") {
+
+                Section(header: Text("一般")) {
                     Toggle("通知を受け取る（ダミー）", isOn: $isNotificationsEnabled)
                 }
-                
-                Section("情報") {
+
+                Section(header: Text("情報")) {
                     Button("このアプリについて") {
                         showAboutSheet = true
                     }
@@ -259,12 +286,12 @@ struct SettingsTabView: View {
                 VStack(spacing: 16) {
                     Image(systemName: "app.badge.checkmark")
                         .font(.system(size: 50))
-                        .foregroundStyle(.tint)
+                        .foregroundColor(.accentColor)
                     Text("ただのSwiftアプリ")
                         .font(.title2.bold())
                     Text("SwiftUI標準コンポーネントのみで構築されたシンプルなユーティリティアプリです。")
                         .multilineTextAlignment(.center)
-                        .foregroundStyle(.secondary)
+                        .foregroundColor(.secondary)
                         .padding(.horizontal)
                     Button("閉じる") {
                         showAboutSheet = false
@@ -272,12 +299,14 @@ struct SettingsTabView: View {
                     .buttonStyle(.borderedProminent)
                     .padding(.top)
                 }
-                .presentationDetents([.medium])
             }
         }
+        .navigationViewStyle(.stack)
     }
 }
 
-#Preview {
-    ContentView()
+struct ContentView_Previews: PreviewProvider {
+    static var previews: some View {
+        ContentView()
+    }
 }
